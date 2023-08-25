@@ -1,6 +1,12 @@
-# A simple Unicycle estimation problem in GTSAM
+# Evaluating Outlier Rejection Techniques in GTSAM
 
-This is a simple example showing how to do optimization in GTSAM.  The code creates a simple unicycle model and estimates where that unicycle is over time using GTSAM.  The measurements at each timestep consist of range measurements to some fixed landmarks.  The locations of the landmarks are also estimated.
+## Simple Optimization (no faults)
+
+The base of this code is a simple example showing how to do optimization in GTSAM. The code creates a simple unicycle model and estimates where that unicycle is over time using GTSAM.  The measurements at each timestep consist of range measurements to some fixed landmarks.  The locations of the landmarks are also estimated.  This works using two files:
+* `unicycle_sim.py`
+* `simple_opt.py`
+
+
 
 The code consists of (`example1-gtsam.py`):
 
