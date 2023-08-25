@@ -21,7 +21,7 @@ def modulo_idx(vector,idx):
 
 def dynamics(curr_pose,V,w,dt,bias=0., add_noise=None):
     '''
-    Takes in and returns a a gtsam.Pose2 object
+    Takes in and returns a gtsam.Pose2 object
 
     Args: 
         curr_pose: A gtsam Pose2 object

@@ -135,7 +135,5 @@ fig = plt.figure()
 plt.plot(np_true_poses[:,0],np_true_poses[:,1])
 plt.plot(np_est_poses[:,0],np_est_poses[:,1])
 plt.plot(initial_np[:,0],initial_np[:,1])
-plt.legend(['truth','est','initial'])
+plt.legend(['truth', 'est', 'initial'])
 plt.show()
-
-# %%
