@@ -12,7 +12,8 @@ import numpy as np
 import gtsam
 import matplotlib.pyplot as plt
 import copy
-import examples as ef #example functions
+from typing import List, Optional
+from functools import partial
 
 def pose2_list_to_nparray(pose2_list):
     going_out = np.zeros((len(pose2_list),3))
@@ -20,7 +21,7 @@ def pose2_list_to_nparray(pose2_list):
         going_out[ii] = np.array([cp.x(),cp.y(),cp.theta()])
     return going_out
 
-def angelize_np_array(np_array):
+def angleize_np_array(np_array):
     ''' 
     Take in an np array and make them all valid angles (between -pi and pi) by adding
     and subtracting 2*pi values to them
@@ -35,7 +36,33 @@ def angelize_np_array(np_array):
 # returns the est_state.  Then RMSE computations can be done outside, enabling
 # Monte Carlo experiments with this code
 
+def error_range_known_landmark (landmark_loc : np.ndarray, measurement: float, 
+                                this: gtsam.CustomFactor, values: gtsam.Values, 
+                                jacobians: Optional[List[np.ndarray]]) -> np.ndarray:
+    key = this.keys()[0]
+    est_loc = values.atPose2(key)
+    np_est_loc = np.array([est_loc.x(), est_loc.y(), est_loc.theta()])
+    diff_loc = np_est_loc[:2] - landmark_loc
+    pred_range = m.sqrt( np.sum(np.square(diff_loc)) )
+    error = pred_range - measurement 
+    # print('Error',error,'pred_range',pred_range,'measurement',measurement,'landmakr_loc',landmark_loc)
+
+    if jacobians is not None:
+        # Have to be careful with Jacobians.  They are not with respect to the
+        # full state, but rather the error state.  
+        range_deriv = np.array([diff_loc[0]/pred_range, diff_loc[1]/pred_range, 0])
+        # Now rotate into the error space for Pose2
+        theta = est_loc.theta()
+        DCM = np.array([m.cos(theta), -m.sin(theta),m.sin(theta), m.cos(theta)]).reshape(2,2)
+        range_deriv[:2] = range_deriv[:2]@DCM
+        jacobians[0] = range_deriv.reshape(1,3)
+        # print('diff_loc',diff_loc,'jacobian',jacobians[0])
+    
+    return np.array([error])
+# def gtsam_no_outliers(inputs, )
+
 if __name__ == '__main__':
+    use_custom = True
     # First, read in the data from the file
     in_file = 'unicycle_data.npz'
     in_data = np.load(in_file)
@@ -67,19 +94,7 @@ if __name__ == '__main__':
 
     ## Functions for creating keys
     nl = len(landmark_locs) # number of landmarks
-    lm_key = lambda x: x
-    pose_key = lambda x: x+nl
-
-    ## To create "range" measurements between the landmark and the robot, need to
-    ## have landmark hidden variables.  Don't really want to estimate their locations
-    ## though, so put in an equality constraint to their location
-
-    ## Landmarks at fixed locations... Lock them in the graph as well...
-    for jj,curr_lm in enumerate(landmark_locs):
-        lm = gtsam.Point2(curr_lm)
-        initial_estimates.insert(lm_key(jj), lm )
-        graph.add(gtsam.NonlinearEqualityPoint2(lm_key(jj), lm)) 
-
+    pose_key = lambda x: gtsam.symbol('x',x)
 
     ## odometry factors
     ### Note that this uses Lie Algebra sorts of things. The factor is the difference between the 
@@ -95,7 +110,8 @@ if __name__ == '__main__':
     # measurement factors
     for ii,meas in enumerate(Z):
         for jj in range(nl):
-            graph.add( gtsam.RangeFactor2D( pose_key(ii), lm_key(jj), meas[jj], meas_noise ) )
+            graph.add( gtsam.CustomFactor( meas_noise, [pose_key(ii)], 
+                                            partial(error_range_known_landmark, landmark_locs[jj], meas[jj] ) ) )
 
     ## Graph is formed, but need some initial values for the 
     ## Use odometry only to initialize the graph.  Store the initial estimate as well for plotting (initial_np)
@@ -126,7 +142,7 @@ if __name__ == '__main__':
     truth = in_data['truth']
     RMSE = m.sqrt(np.average(np.square(truth[:,:2]- np_est_poses[:,:2])))
     print("RMSE (on x and y) is",RMSE)
-    RMSE_ang = m.sqrt(np.average( angelize_np_array( np.square(truth[:,2]- np_est_poses[:,2]) ) ) )
+    RMSE_ang = m.sqrt(np.average( angleize_np_array( np.square(truth[:,2]- np_est_poses[:,2]) ) ) )
     print("RMSE (on angle) is",RMSE_ang)
 
     fig = plt.figure()
