@@ -16,6 +16,11 @@ from typing import List, Optional
 from functools import partial
 
 def pose2_list_to_nparray(pose2_list):
+    '''
+    A helper function that takes gtsam Pose2 types and converts into
+    a numpy array that is Nx3, where the three columns correspond with
+    x,y,theta
+    '''
     going_out = np.zeros((len(pose2_list),3))
     for ii,cp in enumerate(pose2_list):
         going_out[ii] = np.array([cp.x(),cp.y(),cp.theta()])
@@ -39,6 +44,20 @@ def angleize_np_array(np_array):
 def error_range_known_landmark (landmark_loc : np.ndarray, measurement: float, 
                                 this: gtsam.CustomFactor, values: gtsam.Values, 
                                 jacobians: Optional[List[np.ndarray]]) -> np.ndarray:
+    '''
+    This is a custom factor for GTSAM.  It takes in a known landmark location and the 
+    measured range, returning the error and the Jacobians of the measurement (as needed)
+    
+    Inputs:
+        landmark_loc: a 2-element numpy vector that has the location of the landmark
+        measurement:  scalar measurement between current robot location and landmark
+        this:  Makes it callable by gtsam as a custom factor
+        values:  gtsam stuff, but in this case should give me a robot location (Pose2)
+        jacobians:  If required, lets me pass out the H matrix (d measurement / d pose2)
+    
+    Output:  the error between the predicted range and the measurements (h(x) - z) 
+    '''
+
     key = this.keys()[0]
     est_loc = values.atPose2(key)
     np_est_loc = np.array([est_loc.x(), est_loc.y(), est_loc.theta()])
@@ -56,13 +75,10 @@ def error_range_known_landmark (landmark_loc : np.ndarray, measurement: float,
         DCM = np.array([m.cos(theta), -m.sin(theta),m.sin(theta), m.cos(theta)]).reshape(2,2)
         range_deriv[:2] = range_deriv[:2]@DCM
         jacobians[0] = range_deriv.reshape(1,3)
-        # print('diff_loc',diff_loc,'jacobian',jacobians[0])
     
     return np.array([error])
-# def gtsam_no_outliers(inputs, )
 
 if __name__ == '__main__':
-    use_custom = True
     # First, read in the data from the file
     in_file = 'unicycle_data.npz'
     in_data = np.load(in_file)
@@ -88,7 +104,7 @@ if __name__ == '__main__':
     graph = gtsam.NonlinearFactorGraph()
     initial_estimates = gtsam.Values()
 
-    ## Functions for creating keys
+    ## Functions for creating keys -- identifiers for hidden variables
     nl = len(landmark_locs) # number of landmarks
     pose_key = lambda x: gtsam.symbol('x',x)
 
@@ -109,8 +125,8 @@ if __name__ == '__main__':
             graph.add( gtsam.CustomFactor( meas_noise, [pose_key(ii)], 
                                             partial(error_range_known_landmark, landmark_locs[jj], meas[jj] ) ) )
 
-    ## Graph is formed, but need some initial values for the 
-    ## Use odometry only to initialize the graph.  Store the initial estimate as well for plotting (initial_np)
+    # Graph is formed, but need some initial values for the 
+    # Use odometry only to initialize the graph.  Store the initial estimate as well for plotting (initial_np)
     initial_estimates.insert( pose_key(0), gtsam.Pose2(*x0) )
     curr_x=copy.copy( x0 )
     initial_np = np.zeros((N+1,3))
