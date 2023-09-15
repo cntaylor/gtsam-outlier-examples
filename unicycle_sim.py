@@ -113,6 +113,3 @@ if __name__ == "__main__":
     
     # Done.... store everything out!
     np.savez(out_file, truth=true_poses, landmarks=landmark_locs, inputs=inputs, measurements=measurements)
-
-
-

@@ -88,10 +88,6 @@ if __name__ == '__main__':
     graph = gtsam.NonlinearFactorGraph()
     initial_estimates = gtsam.Values()
 
-    ## I am going to do the keys as follows. 0->(nl-1) are the keys for the landmarks.
-    ## nl -> N+nl-1 will be the unicycle locations
-    ## (See comment below on why we need keys for the landmark locations, even though they are known)
-
     ## Functions for creating keys
     nl = len(landmark_locs) # number of landmarks
     pose_key = lambda x: gtsam.symbol('x',x)
