@@ -51,6 +51,26 @@ def noiseless_meas(state : np.array, landmark_locs : np.array) -> np.array:
 def measurement_isotropic_noise(measurements : np.array, S_R : float) -> np.array:
     return measurements + S_R*np.random.randn(*measurements.shape)
 
+def measurement_with_outliers(measurements: np.array, S_R: np.array, outlier_prob: float, outlier_mult : float = 15.) -> np.array:
+    '''
+    This function takes in the measurements and corrupts them with either S_R stand devaition noise or, with probabilty outlier_prob,
+    noise with stdev S_R * outlier_mult
+
+    Inputs:
+        seasurements : the thing to be corrupted
+        S_R        : the (discrete) square root of the R matrix used to do non-outlier noise
+        outlier_prob : the probability of each measurement to be corrupted by an outlier (should be 0 < % < 1, checked)
+        outlier_mult : What to multiply S_R by to get the outlier covariance (shlud be >1 but not checked)
+    
+    Outputs:
+        a corrupted measurement vector
+    '''
+    assert (outlier_prob >= 0.), f"outlier_prob must be between 0 and 1.  Got {outlier_prob} instead"
+    assert (outlier_prob <= 1.), f"outlier_prob must be between 0 and 1.  Got {outlier_prob} instead"
+    corrupt_w_outlier = np.random.rand(*measurements.shape) < outlier_prob
+    noise = S_R * np.random.randn(*measurements.shape)
+    noise[corrupt_w_outlier] *= outlier_mult
+    return measurements + noise
 
 if __name__ == "__main__":
     # scalars that control the environment
@@ -94,7 +114,10 @@ if __name__ == "__main__":
     # How should I corrupt the dynamics?  Define pn_func (process noise function)
     pn_func = partial(process_white_noise, S_Q = np.diag(np.array([.1,.1,.02])*sqrt(dt) ) )
     # How should I corrupt the measurements?  Define mn_func (measurement noise function)
-    mn_func = partial(measurement_isotropic_noise, S_R = 1)
+    ## White noise only
+    # mn_func = partial(measurement_isotropic_noise, S_R = 1)
+    ## Random probability of outlier
+    mn_func = partial(measurement_with_outliers, S_R = 1, outlier_prob = .1)
 
     # Generate the truth data and measurements
     
