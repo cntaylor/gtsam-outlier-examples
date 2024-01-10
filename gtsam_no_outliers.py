@@ -78,27 +78,36 @@ def error_range_known_landmark (landmark_loc : np.ndarray, measurement: float,
     
     return np.array([error])
 
-if __name__ == '__main__':
-    # First, read in the data from the file
-    in_file = 'unicycle_data.npz'
-    in_data = np.load(in_file)
+def solve_scenario(in_data : dict, 
+                   dt : float = .1,
+                   meas_noise: gtsam.noiseModel = \
+                    gtsam.noiseModel.Diagonal.Sigmas(np.diag(np.array([1.]))),
+                   dyn_noise: gtsam.noiseModel = \
+                    gtsam.noiseModel.Diagonal.Sigmas(np.array([.1,.1,.02]) * m.sqrt(.1))) \
+                -> np.array:
+    '''
+    Take in a dictionary that has the 'measurements', 'inputs', 'x0', and 'landmarks' 
+    locations in it.  Create a graph and return the optimized results as a np.array.  
+    By passing in the noiseModels, allows the external user to try different Robust 
+    (M-estimators) with the same function
+
+    Inputs:
+        input_meas_dict: the dictionary with the required information
+        dt: the timestep between states (used with inputs to propagate)
+        meas_noise:  What noise model to use with the measurements
+        dyn_noise: What noise model to use with the dyanmics factors
+
+    Outputs:
+        A Nx3 np.array with the output poses
+
+    '''
     Z = in_data['measurements'] # Z is the set of all measurements
     N = len(Z) - 1
     U = in_data['inputs'] # U is the set of all inputs, should be length N (which had -1 to get it)
     assert len(U)==N, "inputs and measurements have incompatible length"
     landmark_locs = in_data['landmarks']
 
-    # The next few lines of code will work best when it matches how the system was run
-    # Up to the user to make sure this matches with unicycle_sim output.
-    dt = .1
-
-    s_Q = np.array([.1,.1,.02]) * m.sqrt(dt)
-    process_noise = gtsam.noiseModel.Diagonal.Sigmas(s_Q)
-
-    SR = np.diag(np.array([1.]))
-    meas_noise = gtsam.noiseModel.Diagonal.Sigmas(SR)
-
-    x0 = np.array([0, 0, m.pi/2])
+    x0 = in_data['x0']
 
     # Create the graph and optimize
     graph = gtsam.NonlinearFactorGraph()
@@ -117,7 +126,7 @@ if __name__ == '__main__':
         curr_w = U[ii,1] * dt
         Vx = curr_V * m.cos(curr_w/2.)
         Vy = curr_V * m.sin(curr_w/2.)
-        graph.add( gtsam.BetweenFactorPose2( pose_key(ii), pose_key(ii+1), gtsam.Pose2( Vx, Vy, curr_w ), process_noise ) )
+        graph.add( gtsam.BetweenFactorPose2( pose_key(ii), pose_key(ii+1), gtsam.Pose2( Vx, Vy, curr_w ), dyn_noise ) )
 
     # measurement factors
     for ii,meas in enumerate(Z):
@@ -145,12 +154,23 @@ if __name__ == '__main__':
     optimizer = gtsam.GaussNewtonOptimizer(graph, initial_estimates, parameters)
     result = optimizer.optimize()
 
-    #%%  Plot the results
+    # Prepare the results to be returned.
     est_poses=[]
     for ii in range(N):
         est_poses.append(result.atPose2(pose_key(ii)))
     est_poses.append(result.atPose2(pose_key(N)))
     np_est_poses = pose2_list_to_nparray(est_poses)
+
+    return np_est_poses
+
+if __name__ == '__main__':
+    # First, read in the data from the file
+    in_file = 'unicycle_data.npz'
+    in_data = dict(np.load(in_file))
+
+    in_data['x0'] = np.array([0, 0, m.pi/2])
+    np_est_poses = solve_scenario(in_data)
+
     truth = in_data['truth']
     RMSE = m.sqrt(np.average(np.square(truth[:,:2]- np_est_poses[:,:2])))
     print("RMSE (on x and y) is",RMSE)
