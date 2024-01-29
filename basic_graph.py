@@ -15,6 +15,7 @@ import copy
 from typing import List, Optional
 from functools import partial
 from tqdm import tqdm
+import time
 
 def pose2_list_to_nparray(pose2_list):
     '''
@@ -162,6 +163,7 @@ def solve_scenario(in_data : dict,
 
 #%%
 if __name__ == '__main__':
+    out_file = 'large_unicycle_res.npz'
     n_runs = 100
     # This is a data structure that holds the directory name and
     # what the output file should say so they get picked together!
@@ -173,19 +175,50 @@ if __name__ == '__main__':
         ['measurement_40pc_outliers/', 'meas_40pc'],
         ['measurement_50pc_outliers/', 'meas_50pc'],
     ])
+    # The basic Gaussian noise model assumed
+    basic_meas_noise = \
+        gtsam.noiseModel.Diagonal.Sigmas(np.diag(np.array([1.])))
+
     est_opts = np.array([
-        'no_outlier',
-        'huber'
+        ['no_outlier', basic_meas_noise],
+        ['huber', gtsam.noiseModel.Robust.Create(
+                            gtsam.noiseModel.mEstimator.Huber(k=1),
+                            basic_meas_noise)],
+        ['Cauchy', gtsam.noiseModel.Robust.Create(
+                            gtsam.noiseModel.mEstimator.Cauchy(k=.1),
+                            basic_meas_noise)],
+        ['DCS-.5', gtsam.noiseModel.Robust.Create(
+                            gtsam.noiseModel.mEstimator.DCS(c = 0.5),
+                            basic_meas_noise)],
+        ['DCS-1', gtsam.noiseModel.Robust.Create(
+                            gtsam.noiseModel.mEstimator.DCS(c = 1.0),
+                            basic_meas_noise)],
+        ['DCS-2', gtsam.noiseModel.Robust.Create(
+                            gtsam.noiseModel.mEstimator.DCS(c = 2.0),
+                            basic_meas_noise)],
+        ['Fair', gtsam.noiseModel.Robust.Create(
+                            gtsam.noiseModel.mEstimator.Fair(1.3998),
+                            basic_meas_noise)],
+        ['Geman', gtsam.noiseModel.Robust.Create(
+                            gtsam.noiseModel.mEstimator.GemanMcClure(1.0),
+                            basic_meas_noise)],
+        ['Tukey', gtsam.noiseModel.Robust.Create(
+                            gtsam.noiseModel.mEstimator.Tukey(4.6851),
+                            basic_meas_noise)],
+        ['Welsch', gtsam.noiseModel.Robust.Create(
+                            gtsam.noiseModel.mEstimator.Welsch(2.9846),
+                            basic_meas_noise)]
     ])
+
+    times = np.zeros((len(in_opts),len(est_opts),n_runs))
+    pos_RMSEs = np.zeros((len(in_opts),len(est_opts),n_runs))
+    ang_RMSEs = np.zeros((len(in_opts),len(est_opts),n_runs))
     # in_select and est_select control everything below
     for in_select in range(len(in_opts)):
         for est_select in range(len(est_opts)):
-            in_select=0
-            est_select=0
-
+            print('Running input',in_opts[in_select,0], 'and estimator',est_opts[est_select,0])
             in_path = in_opts[in_select,0]
-            out_file = 'RMSE_input_'+in_opts[in_select,1]+'_est_'+est_opts[est_select]+'.npy'
-            RMSEs = np.zeros((n_runs,2))
+            # out_file = 'RMSE_input_'+in_opts[in_select,1]+'_est_'+est_opts[est_select,0]+'.npy'
             for i in tqdm(range(n_runs)):
                 # First, read in the data from the file
                 in_file = in_path+f'run_{i:04d}.npz'
@@ -194,22 +227,14 @@ if __name__ == '__main__':
                 in_data['x0'] = np.array([0, 0, m.pi/2])
 
                 # Decide what cost function we will use for the measurements
-                # The basic Gaussian noise model assumed
-                basic_meas_noise = \
-                    gtsam.noiseModel.Diagonal.Sigmas(np.diag(np.array([1.])))
-                
-                if est_select == 0:
-                    meas_noise=basic_meas_noise
-                elif est_select == 1:
-                    meas_noise = \
-                        gtsam.noiseModel.Robust.Create(
-                            gtsam.noiseModel.mEstimator.Huber(k=1),
-                            basic_meas_noise)
-                else:
-                    print('Measurement noise model setup problem')
+                meas_noise = est_opts[est_select,1]
+
                 ########   
                 # Now run the optimziation (with whatever noise model you have)    
-                initial_np, np_est_poses = solve_scenario(in_data, meas_noise= meas_noise)
+                start_time = time.time()
+                initial_np, np_est_poses = solve_scenario(in_data, meas_noise=meas_noise)
+                end_time = time.time()
+                times[in_select,est_select,i] = end_time - start_time
 
                 # plt.plot(np_est_poses)
                 # plt.show()
@@ -229,11 +254,12 @@ if __name__ == '__main__':
                 # print("RMSE (on x and y) is",RMSE)
                 RMSE_ang = m.sqrt(np.average( np.square( angleize_np_array(truth[:,2]- np_est_poses[:,2]) ) ) )
                 # print("RMSE (on angle) is",RMSE_ang)
-                RMSEs[i] = np.array([RMSE,RMSE_ang])
-            np.save(out_file,RMSEs)
+                pos_RMSEs[in_select,est_select,i] = RMSE
+                ang_RMSEs[in_select,est_select,i] = RMSE_ang
             # print("Average RMSEs (pos & angle) are",np.average(RMSEs,1))
             # plt.plot(RMSEs)
             # plt.show()
+    np.savez(out_file, times=times, pos_RMSEs=pos_RMSEs, ang_RMSEs=ang_RMSEs, in_opts=in_opts, est_opts=est_opts)
 
 
 # %%
