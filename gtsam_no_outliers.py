@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import copy
 from typing import List, Optional
 from functools import partial
+from tqdm import tqdm
 
 def pose2_list_to_nparray(pose2_list):
     '''
@@ -36,10 +37,6 @@ def angleize_np_array(np_array):
     while np.any(np_array > m.pi):    
         np_array[np_array > m.pi] -= 2 * m.pi
     return np_array
-
-# TODO:  take most of main and make it a function, optimize, that takes in Z and U and 
-# returns the est_state.  Then RMSE computations can be done outside, enabling
-# Monte Carlo experiments with this code
 
 def error_range_known_landmark (landmark_loc : np.ndarray, measurement: float, 
                                 this: gtsam.CustomFactor, values: gtsam.Values, 
@@ -161,26 +158,44 @@ def solve_scenario(in_data : dict,
     est_poses.append(result.atPose2(pose_key(N)))
     np_est_poses = pose2_list_to_nparray(est_poses)
 
-    return np_est_poses
+    return initial_np, np_est_poses
 
+#%%
 if __name__ == '__main__':
-    # First, read in the data from the file
-    in_file = 'unicycle_data.npz'
-    in_data = dict(np.load(in_file))
+    n_runs = 100
+    path = 'measurement_outliers/'
+    RMSEs = np.zeros((n_runs,2))
+    for i in tqdm(range(n_runs)):
+        # First, read in the data from the file
+        in_file = path+f'run_{i:04d}.npz'
+        in_data = dict(np.load(in_file))
 
-    in_data['x0'] = np.array([0, 0, m.pi/2])
-    np_est_poses = solve_scenario(in_data)
+        in_data['x0'] = np.array([0, 0, m.pi/2])
+        initial_np, np_est_poses = solve_scenario(in_data)
+        
+        # plt.plot(np_est_poses)
+        # plt.show()
+        truth = in_data['truth']
 
-    truth = in_data['truth']
-    RMSE = m.sqrt(np.average(np.square(truth[:,:2]- np_est_poses[:,:2])))
-    print("RMSE (on x and y) is",RMSE)
-    RMSE_ang = m.sqrt(np.average( angleize_np_array( np.square(truth[:,2]- np_est_poses[:,2]) ) ) )
-    print("RMSE (on angle) is",RMSE_ang)
+        # # When doing one run, good for plotting results
+        # fig = plt.figure()
 
-    fig = plt.figure()
+        # plt.plot(truth[:,0], truth[:,1])
+        # plt.plot(np_est_poses[:,0], np_est_poses[:,1])
+        # plt.plot(initial_np[:,0], initial_np[:,1])
+        # plt.legend(['truth', 'est', 'initial'])
+        # plt.show()
 
-    plt.plot(truth[:,0], truth[:,1])
-    plt.plot(np_est_poses[:,0], np_est_poses[:,1])
-    plt.plot(initial_np[:,0], initial_np[:,1])
-    plt.legend(['truth', 'est', 'initial'])
+
+        RMSE = m.sqrt(np.average(np.square(truth[:,:2]- np_est_poses[:,:2])))
+        # print("RMSE (on x and y) is",RMSE)
+        RMSE_ang = m.sqrt(np.average( np.square( angleize_np_array(truth[:,2]- np_est_poses[:,2]) ) ) )
+        # print("RMSE (on angle) is",RMSE_ang)
+        RMSEs[i] = np.array([RMSE,RMSE_ang])
+    np.save('RMSE_input_meas_outlier_est_no_outlier.npy',RMSEs)
+    # print("Average RMSEs (pos & angle) are",np.average(RMSEs,1))
+    plt.plot(RMSEs)
     plt.show()
+
+
+# %%

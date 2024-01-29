@@ -13,6 +13,8 @@ import numpy as np
 from math import pi, sqrt, cos, sin
 from functools import partial
 from copy import copy
+from tqdm import tqdm
+import os
 
 def angle_bound_rad(in_angle : float) -> float:
     # Simple check to put the value between -pi and pi
@@ -78,61 +80,73 @@ if __name__ == "__main__":
     box_size = 100
     num_seconds = 60
     dt = .1
-    out_file = 'unicycle_data.npz'
+    num_outputs = 100
+    dir_name = 'measurement_outliers'
+
+    # Check if the directory exists
+    if os.path.isdir(dir_name):
+        print("Warning: This may overwrite existing data files in the directory.")
+    else:
+        # Create the directory if it does not exist
+        os.makedirs(dir_name)
+
+    for curr_run in tqdm(range(num_outputs), desc='Simulation Progress'):
+
+        out_file = os.path.join(dir_name,f'run_{curr_run:04d}.npz')
     
-    #Allocate everything that will go out
-    N = round(num_seconds/dt)
-    true_poses = np.zeros(( N+1, 3 ))
-    landmark_locs = np.zeros(( nl, 2 ))
-    measurements = np.zeros(( N+1, nl ))
-    inputs = np.zeros(( N, 2 ))
+        #Allocate everything that will go out
+        N = round(num_seconds/dt)
+        true_poses = np.zeros(( N+1, 3 ))
+        landmark_locs = np.zeros(( nl, 2 ))
+        measurements = np.zeros(( N+1, nl ))
+        inputs = np.zeros(( N, 2 ))
 
-    # what pattern the unicycle does is going to be a repeating sequence of the
-    # `V_command` and `w_command` arrays
+        # what pattern the unicycle does is going to be a repeating sequence of the
+        # `V_command` and `w_command` arrays
 
-    ## Set up velocity commands
-    V_one = int(round(5/dt)) #steps to run at 1m/s
-    V_two = int(round(3/dt)) # steps to run at 2 m/s
-    V_command = np.append(np.ones(V_one),2*np.ones(V_two))
-    ## Set up rotation commands
-    seconds_straight = 5
-    seconds_to_turn=3
-    w_straight =int(round(seconds_straight/dt)) # steps to go straight
-    w_turn = int(round(seconds_to_turn/dt)) #steps to turn
-    ### pi/(2*...) is to make it turn 90 degrees in the turning time. Can modify (obviously)
-    w_command = np.append(np.zeros(w_straight), np.ones(w_turn) * pi/(2*seconds_to_turn) )
+        ## Set up velocity commands
+        V_one = int(round(5/dt)) #steps to run at 1m/s
+        V_two = int(round(3/dt)) # steps to run at 2 m/s
+        V_command = np.append(np.ones(V_one),2*np.ones(V_two))
+        ## Set up rotation commands
+        seconds_straight = 5
+        seconds_to_turn=3
+        w_straight =int(round(seconds_straight/dt)) # steps to go straight
+        w_turn = int(round(seconds_to_turn/dt)) #steps to turn
+        ### pi/(2*...) is to make it turn 90 degrees in the turning time. Can modify (obviously)
+        w_command = np.append(np.zeros(w_straight), np.ones(w_turn) * pi/(2*seconds_to_turn) )
 
-    ## Now create the inputs array from the V_command and w_command
-    for i in range(N):
-        inputs[i,0] = V_command[i % len(V_command) ]
-        inputs[i,1] = w_command[i % len(V_command) ]
+        ## Now create the inputs array from the V_command and w_command
+        for i in range(N):
+            inputs[i,0] = V_command[i % len(V_command) ]
+            inputs[i,1] = w_command[i % len(V_command) ]
 
-    # Create Landmarks randomly in box, centered at 0,0
-    landmark_locs = np.random.rand(nl,2)*box_size - box_size/2
+        # Create Landmarks randomly in box, centered at 0,0
+        landmark_locs = np.random.rand(nl,2)*box_size - box_size/2
 
 
-    # How should I corrupt the dynamics?  Define pn_func (process noise function)
-    pn_func = partial(process_white_noise, S_Q = np.diag(np.array([.1,.1,.02])*sqrt(dt) ) )
-    # How should I corrupt the measurements?  Define mn_func (measurement noise function)
-    ## White noise only
-    # mn_func = partial(measurement_isotropic_noise, S_R = 1)
-    ## Random probability of outlier
-    mn_func = partial(measurement_with_outliers, S_R = 1, outlier_prob = .1)
+        # How should I corrupt the dynamics?  Define pn_func (process noise function)
+        pn_func = partial(process_white_noise, S_Q = np.diag(np.array([.1,.1,.02])*sqrt(dt) ) )
+        # How should I corrupt the measurements?  Define mn_func (measurement noise function)
+        ## White noise only
+        # mn_func = partial(measurement_isotropic_noise, S_R = 1)
+        ## Random probability of outlier
+        mn_func = partial(measurement_with_outliers, S_R = 1, outlier_prob = .1)
 
-    # Generate the truth data and measurements
-    
-    
-    ## Start at 0,0, with a heading of pi/2 ... give or take
-    S0 = np.diag(np.array([1., 1., pi/8]))
-    initial_error = S0.dot(np.random.randn(3))
-    curr_x = process_white_noise(np.array([0.,0., pi/2]), S0)
-    true_poses[0]=copy(curr_x)
-    measurements[0] = mn_func(noiseless_meas(curr_x, landmark_locs))
+        # Generate the truth data and measurements
+        
+        
+        ## Start at 0,0, with a heading of pi/2 ... give or take
+        S0 = np.diag(np.array([1., 1., pi/8]))
+        initial_error = S0.dot(np.random.randn(3))
+        curr_x = process_white_noise(np.array([0.,0., pi/2]), S0)
+        true_poses[0]=copy(curr_x)
+        measurements[0] = mn_func(noiseless_meas(curr_x, landmark_locs))
 
-    for i in range(N):
-        curr_x = pn_func( noiseless_dyn( curr_x, inputs[i], dt) )
-        true_poses[i+1] = copy(curr_x)
-        measurements[i+1] = mn_func( noiseless_meas( curr_x, landmark_locs ) )
-    
-    # Done.... store everything out!
-    np.savez(out_file, truth=true_poses, landmarks=landmark_locs, inputs=inputs, measurements=measurements)
+        for i in range(N):
+            curr_x = pn_func( noiseless_dyn( curr_x, inputs[i], dt) )
+            true_poses[i+1] = copy(curr_x)
+            measurements[i+1] = mn_func( noiseless_meas( curr_x, landmark_locs ) )
+        
+        # Done.... store everything out!
+        np.savez(out_file, truth=true_poses, landmarks=landmark_locs, inputs=inputs, measurements=measurements)
