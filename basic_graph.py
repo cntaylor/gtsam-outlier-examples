@@ -163,39 +163,77 @@ def solve_scenario(in_data : dict,
 #%%
 if __name__ == '__main__':
     n_runs = 100
-    path = 'measurement_outliers/'
-    RMSEs = np.zeros((n_runs,2))
-    for i in tqdm(range(n_runs)):
-        # First, read in the data from the file
-        in_file = path+f'run_{i:04d}.npz'
-        in_data = dict(np.load(in_file))
+    # This is a data structure that holds the directory name and
+    # what the output file should say so they get picked together!
+    in_opts = np.array([
+        ['no_outliers/', 'no_outlier'],
+        ['measurement_10pc_outliers/', 'meas_10pc'],
+        ['measurement_20pc_outliers/', 'meas_20pc'],
+        ['measurement_30pc_outliers/', 'meas_30pc'],
+        ['measurement_40pc_outliers/', 'meas_40pc'],
+        ['measurement_50pc_outliers/', 'meas_50pc'],
+    ])
+    est_opts = np.array([
+        'no_outlier',
+        'huber'
+    ])
+    # in_select and est_select control everything below
+    for in_select in range(len(in_opts)):
+        for est_select in range(len(est_opts)):
+            in_select=0
+            est_select=0
 
-        in_data['x0'] = np.array([0, 0, m.pi/2])
-        initial_np, np_est_poses = solve_scenario(in_data)
-        
-        # plt.plot(np_est_poses)
-        # plt.show()
-        truth = in_data['truth']
+            in_path = in_opts[in_select,0]
+            out_file = 'RMSE_input_'+in_opts[in_select,1]+'_est_'+est_opts[est_select]+'.npy'
+            RMSEs = np.zeros((n_runs,2))
+            for i in tqdm(range(n_runs)):
+                # First, read in the data from the file
+                in_file = in_path+f'run_{i:04d}.npz'
+                in_data = dict(np.load(in_file))
 
-        # # When doing one run, good for plotting results
-        # fig = plt.figure()
+                in_data['x0'] = np.array([0, 0, m.pi/2])
 
-        # plt.plot(truth[:,0], truth[:,1])
-        # plt.plot(np_est_poses[:,0], np_est_poses[:,1])
-        # plt.plot(initial_np[:,0], initial_np[:,1])
-        # plt.legend(['truth', 'est', 'initial'])
-        # plt.show()
+                # Decide what cost function we will use for the measurements
+                # The basic Gaussian noise model assumed
+                basic_meas_noise = \
+                    gtsam.noiseModel.Diagonal.Sigmas(np.diag(np.array([1.])))
+                
+                if est_select == 0:
+                    meas_noise=basic_meas_noise
+                elif est_select == 1:
+                    meas_noise = \
+                        gtsam.noiseModel.Robust.Create(
+                            gtsam.noiseModel.mEstimator.Huber(k=1),
+                            basic_meas_noise)
+                else:
+                    print('Measurement noise model setup problem')
+                ########   
+                # Now run the optimziation (with whatever noise model you have)    
+                initial_np, np_est_poses = solve_scenario(in_data, meas_noise= meas_noise)
+
+                # plt.plot(np_est_poses)
+                # plt.show()
+                truth = in_data['truth']
+
+                # # When doing one run, good for plotting results
+                # fig = plt.figure()
+
+                # plt.plot(truth[:,0], truth[:,1])
+                # plt.plot(np_est_poses[:,0], np_est_poses[:,1])
+                # plt.plot(initial_np[:,0], initial_np[:,1])
+                # plt.legend(['truth', 'est', 'initial'])
+                # plt.show()
 
 
-        RMSE = m.sqrt(np.average(np.square(truth[:,:2]- np_est_poses[:,:2])))
-        # print("RMSE (on x and y) is",RMSE)
-        RMSE_ang = m.sqrt(np.average( np.square( angleize_np_array(truth[:,2]- np_est_poses[:,2]) ) ) )
-        # print("RMSE (on angle) is",RMSE_ang)
-        RMSEs[i] = np.array([RMSE,RMSE_ang])
-    np.save('RMSE_input_meas_outlier_est_no_outlier.npy',RMSEs)
-    # print("Average RMSEs (pos & angle) are",np.average(RMSEs,1))
-    plt.plot(RMSEs)
-    plt.show()
+                RMSE = m.sqrt(np.average(np.square(truth[:,:2]- np_est_poses[:,:2])))
+                # print("RMSE (on x and y) is",RMSE)
+                RMSE_ang = m.sqrt(np.average( np.square( angleize_np_array(truth[:,2]- np_est_poses[:,2]) ) ) )
+                # print("RMSE (on angle) is",RMSE_ang)
+                RMSEs[i] = np.array([RMSE,RMSE_ang])
+            np.save(out_file,RMSEs)
+            # print("Average RMSEs (pos & angle) are",np.average(RMSEs,1))
+            # plt.plot(RMSEs)
+            # plt.show()
 
 
 # %%

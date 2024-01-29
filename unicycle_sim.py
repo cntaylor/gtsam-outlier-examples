@@ -81,7 +81,17 @@ if __name__ == "__main__":
     num_seconds = 60
     dt = .1
     num_outputs = 100
-    dir_name = 'measurement_outliers'
+    dir_name = 'measurement_50pc_outliers'
+
+    # How should I corrupt the dynamics?  Define pn_func (process noise function)
+    pn_func = partial(process_white_noise, S_Q = np.diag(np.array([.1,.1,.02])*sqrt(dt) ) )
+    # How should I corrupt the measurements?  Define mn_func (measurement noise function)
+    # # White noise only
+    # mn_func = partial(measurement_isotropic_noise, S_R = 1)
+    ## Random probability of outlier
+    mn_func = partial(measurement_with_outliers, S_R = 1, outlier_prob = .5)
+
+
 
     # Check if the directory exists
     if os.path.isdir(dir_name):
@@ -124,14 +134,6 @@ if __name__ == "__main__":
         # Create Landmarks randomly in box, centered at 0,0
         landmark_locs = np.random.rand(nl,2)*box_size - box_size/2
 
-
-        # How should I corrupt the dynamics?  Define pn_func (process noise function)
-        pn_func = partial(process_white_noise, S_Q = np.diag(np.array([.1,.1,.02])*sqrt(dt) ) )
-        # How should I corrupt the measurements?  Define mn_func (measurement noise function)
-        ## White noise only
-        # mn_func = partial(measurement_isotropic_noise, S_R = 1)
-        ## Random probability of outlier
-        mn_func = partial(measurement_with_outliers, S_R = 1, outlier_prob = .1)
 
         # Generate the truth data and measurements
         
