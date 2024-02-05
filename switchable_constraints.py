@@ -1,18 +1,26 @@
+#%%
 import gtsam
 import numpy as np
 import math as m
 from tqdm import tqdm
 from unicycle_est_utils import switchable_error_range_known_landmark, angleize_np_array, pose2_list_to_nparray
 from functools import partial
+import copy
+import time
+
+DEBUG=True
+if DEBUG:
+    import matplotlib.pyplot as plt
+
 
 def solve_scenario(in_data : dict, 
                    dt : float = .1,
                    meas_noise: gtsam.noiseModel = \
-                    gtsam.noiseModel.Diagonal.Isotropic(np.diag(np.array([1.]))),
+                    gtsam.noiseModel.Isotropic.Sigma(1,1.),
                    dyn_noise: gtsam.noiseModel = \
                     gtsam.noiseModel.Diagonal.Sigmas(np.array([.1,.1,.02]) * m.sqrt(.1)),
                    switch_noise: gtsam.noiseModel = \
-                    gtsam.noiseModel.Diagonal.Isotropic(np.array([.04]))) \
+                    gtsam.noiseModel.Isotropic.Sigma(1,.04)) \
                 -> np.array:
     '''
     Take in a dictionary that has the 'measurements', 'inputs', 'x0', and 'landmarks' 
@@ -48,7 +56,12 @@ def solve_scenario(in_data : dict,
     ## Functions for creating keys -- identifiers for hidden variables
     nl = len(landmark_locs) # number of landmarks
     pose_key = lambda x: gtsam.symbol('x',x)
-    switch_key = lambda l, x: gtsam.symbol(f's-{l}', x)
+    # Calculate the number of bits needed to represent the maximum number of landmarks
+    landmark_bits = int(m.ceil(m.log2(nl)))
+    # Lambda function to combine two integers by bit-shifting
+    combine_integers = lambda top_int, bottom_int: (top_int << landmark_bits) | bottom_int
+    # Switch key that associates a measurement with a landmark and then creates a "Key"
+    switch_key = lambda l, x: gtsam.symbol(f's', combine_integers(x,l))
 
     ## odometry factors
     ### Note that this uses Lie Algebra sorts of things. The factor is the difference between the 
@@ -65,13 +78,13 @@ def solve_scenario(in_data : dict,
     for ii,meas in enumerate(Z):
         for jj in range(nl):
             # Add measurement factor
-            graph.add( gtsam.CustomFactor( meas_noise, [pose_key(ii)], 
+            graph.add( gtsam.CustomFactor( meas_noise, [pose_key(ii), switch_key(jj,ii)], 
                                             partial(switchable_error_range_known_landmark, 
-                                                    landmark_locs[jj], meas[jj], 1E-5 ) ) )
+                                                    landmark_locs[jj], meas[jj] ) ) )
             # Add switching factor
-            graph.add( gtsam.CustomeFactor)
+            graph.add( gtsam.PriorFactorDouble( switch_key(jj,ii), 1.0, switch_noise ) )
 
-    # Graph is formed, but need some initial values for the 
+    # Graph is formed, but need some initial values for the poses and switches 
     # Use odometry only to initialize the graph.  Store the initial estimate as well for plotting (initial_np)
     initial_estimates.insert( pose_key(0), gtsam.Pose2(*x0) )
     curr_x=copy.copy( x0 )
@@ -84,7 +97,13 @@ def solve_scenario(in_data : dict,
         initial_estimates.insert(pose_key(ii+1), gtsam.Pose2( *curr_x ) )
         initial_np[ii+1] = curr_x
 
+    # Also initialize the switchable constraint variable nodes
+    for ii in range(len(Z)): # N+1, so not the same as previous loop :)
+        for jj in range(nl):
+            initial_estimates.insert( switch_key(jj,ii), 1.0 )
+
     ## Everything should be set up. Now to optimize
+    ## TODO:  move to dogleg optimizer?
     parameters = gtsam.GaussNewtonParams()
     parameters.setMaxIterations(100)
     parameters.setVerbosity("ERROR")
@@ -103,7 +122,7 @@ def solve_scenario(in_data : dict,
 #%%
 if __name__ == '__main__':
     out_file = 'switchable_constraints_unicycle_res.npz'
-    n_runs = 1
+    n_runs = 100
     # This is a data structure that holds the directory name and
     # what the output file should say so they get picked together!
     in_opts = np.array([
@@ -117,25 +136,34 @@ if __name__ == '__main__':
     # What weight to use on the switching model
 
     est_opts = np.array([
-        ['0.1', gtsam.noiseModel.Diagonal.Isotropic(np.diag(np.array([.01])))],
-        ['0.2', gtsam.noiseModel.Diagonal.Isotropic(np.diag(np.array([.04])))],
-        ['0.3', gtsam.noiseModel.Diagonal.Isotropic(np.diag(np.array([.09])))],
-        ['0.4', gtsam.noiseModel.Diagonal.Isotropic(np.diag(np.array([.16])))],
-        ['0.5', gtsam.noiseModel.Diagonal.Isotropic(np.diag(np.array([.25])))]
+        ['0.1', gtsam.noiseModel.Isotropic.Sigma(1,0.1)],
+        ['0.2', gtsam.noiseModel.Isotropic.Sigma(1,0.2)],
+        ['0.3', gtsam.noiseModel.Isotropic.Sigma(1,0.3)],
+        ['0.4', gtsam.noiseModel.Isotropic.Sigma(1,0.4)],
+        ['0.5', gtsam.noiseModel.Isotropic.Sigma(1,0.5)]
     ])
 
     times = np.zeros((len(in_opts),len(est_opts),n_runs))
     pos_RMSEs = np.zeros((len(in_opts),len(est_opts),n_runs))
     ang_RMSEs = np.zeros((len(in_opts),len(est_opts),n_runs))
     # in_select and est_select control everything below
+    if DEBUG: # change this to know which one runs...
+        in_opts = np.array([in_opts[0]])
+        est_opts = np.array([est_opts[0]])
+        which_run = 0
+        run_list=[which_run]
+        out_file = 'DEBUG'+out_file
+    else:
+        run_list = np.arange(n_runs)
+
     for in_select in range(len(in_opts)):
         for est_select in range(len(est_opts)):
             print('Running input',in_opts[in_select,0], 'and estimator',est_opts[est_select,0])
             in_path = in_opts[in_select,0]
             # out_file = 'RMSE_input_'+in_opts[in_select,1]+'_est_'+est_opts[est_select,0]+'.npy'
-            for i in tqdm(range(n_runs)):
+            for ii in tqdm(run_list):
                 # First, read in the data from the file
-                in_file = in_path+f'run_{i:04d}.npz'
+                in_file = in_path+f'run_{ii:04d}.npz'
                 in_data = dict(np.load(in_file))
 
                 in_data['x0'] = np.array([0, 0, m.pi/2])
@@ -148,29 +176,34 @@ if __name__ == '__main__':
                 start_time = time.time()
                 initial_np, np_est_poses = solve_scenario(in_data, meas_noise=meas_noise)
                 end_time = time.time()
-                times[in_select,est_select,i] = end_time - start_time
+                times[in_select,est_select,ii] = end_time - start_time
+
 
                 # plt.plot(np_est_poses)
                 # plt.show()
                 truth = in_data['truth']
 
-                # # When doing one run, good for plotting results
-                # fig = plt.figure()
+                if DEBUG:
+                    # When doing one run, good for plotting results
+                    fig = plt.figure()
 
-                # plt.plot(truth[:,0], truth[:,1])
-                # plt.plot(np_est_poses[:,0], np_est_poses[:,1])
-                # plt.plot(initial_np[:,0], initial_np[:,1])
-                # plt.legend(['truth', 'est', 'initial'])
-                # plt.show()
+                    plt.plot(truth[:,0], truth[:,1])
+                    plt.plot(np_est_poses[:,0], np_est_poses[:,1])
+                    plt.plot(initial_np[:,0], initial_np[:,1])
+                    plt.legend(['truth', 'est', 'initial'])
+                    plt.show()
 
 
                 RMSE = m.sqrt(np.average(np.square(truth[:,:2]- np_est_poses[:,:2])))
-                # print("RMSE (on x and y) is",RMSE)
                 RMSE_ang = m.sqrt(np.average( np.square( angleize_np_array(truth[:,2]- np_est_poses[:,2]) ) ) )
-                # print("RMSE (on angle) is",RMSE_ang)
-                pos_RMSEs[in_select,est_select,i] = RMSE
-                ang_RMSEs[in_select,est_select,i] = RMSE_ang
+                if DEBUG:
+                    print("RMSE (on x and y) is",RMSE)
+                    print("RMSE (on angle) is",RMSE_ang)
+                pos_RMSEs[in_select,est_select,ii] = RMSE
+                ang_RMSEs[in_select,est_select,ii] = RMSE_ang
             # print("Average RMSEs (pos & angle) are",np.average(RMSEs,1))
             # plt.plot(RMSEs)
             # plt.show()
     np.savez(out_file, times=times, pos_RMSEs=pos_RMSEs, ang_RMSEs=ang_RMSEs, in_opts=in_opts, est_opts=est_opts)
+
+# %%

@@ -62,7 +62,6 @@ def error_range_known_landmark(landmark_loc: np.ndarray, measurement: float,
     return np.array([error])
 
 def switchable_error_range_known_landmark(landmark_loc: np.ndarray, measurement: float, 
-                               epsilon: float = 1E-5,
                                this: gtsam.CustomFactor, values: gtsam.Values, 
                                jacobians: Optional[List[np.ndarray]]) -> np.ndarray:
     '''
@@ -73,7 +72,6 @@ def switchable_error_range_known_landmark(landmark_loc: np.ndarray, measurement:
     Inputs:
         landmark_loc: a 2-element numpy vector that has the location of the landmark
         measurement: scalar measurement between current robot location and landmark
-        epsilon: small number to prevent derivative of square root from going to infinity
         this: Makes it callable by gtsam as a custom factor
         values: gtsam.Values, but in this case should give me a robot location (Pose2) 
                 and a switch (float) value
@@ -84,11 +82,17 @@ def switchable_error_range_known_landmark(landmark_loc: np.ndarray, measurement:
             weighted by the scaling factor
     '''
 
-    key = this.keys()[0]
-    est_loc = values.atPose2(key)
+    # Wanted to make this a parameter that can be passed in, but turns out
+    # to be rather difficult with how this interacts with GTSAM.  So,
+    # it is now set at the beginning of the function :(
+    epsilon = 1E-5
+    
+    key_pose = this.keys()[0]
+    est_loc = values.atPose2(key_pose)
     # I don't know if this is needed or not, but if the switch goes negative, that would
     # throw off the math, so just make sure it doesnt... (while getting the value)
-    orig_switch = max(0,values.atDouble(key))
+    sw_key = this.keys()[1] # switching constraint key
+    orig_switch = max(0,values.atDouble(sw_key))
     # I do sqrt because I want to switch to scale the squared error, not (possibly negative) error
     switch = m.sqrt(orig_switch)
     np_est_loc = np.array([est_loc.x(), est_loc.y(), est_loc.theta()])
