@@ -10,13 +10,17 @@ where V (velocity) and w (turn rate) are the inputs
 import math as m
 import numpy as np
 import gtsam
-import matplotlib.pyplot as plt
 import copy
 from typing import List, Optional
 from functools import partial
 from tqdm import tqdm
 import time
 from unicycle_est_utils import pose2_list_to_nparray, error_range_known_landmark, angleize_np_array
+
+DEBUG=False
+if DEBUG:
+    import matplotlib.pyplot as plt
+
 
 def solve_scenario(in_data : dict, 
                    dt : float = .1,
@@ -106,16 +110,16 @@ def solve_scenario(in_data : dict,
 #%%
 if __name__ == '__main__':
     out_file = 'test_basic_graph_unicycle_res.npz'
-    n_runs = 1
+    n_runs = 50
     # This is a data structure that holds the directory name and
     # what the output file should say so they get picked together!
     in_opts = np.array([
-        ['no_outliers/', 'no_outlier'],
-        ['measurement_10pc_outliers/', 'meas_10pc'],
-        ['measurement_20pc_outliers/', 'meas_20pc'],
-        ['measurement_30pc_outliers/', 'meas_30pc'],
-        ['measurement_40pc_outliers/', 'meas_40pc'],
-        ['measurement_50pc_outliers/', 'meas_50pc'],
+        ['No outliers', 'no_outliers/'],
+        ['10% outliers', 'measurement_10pc_outliers/'],
+        # ['20% outliers', 'measurement_20pc_outliers/'],
+        # ['30% outliers', 'measurement_30pc_outliers/'],
+        # ['40% outliers', 'measurement_40pc_outliers/'],
+        ['50% outliers', 'measurement_50pc_outliers/'],
     ])
     # The basic Gaussian noise model assumed
     basic_meas_noise = \
@@ -126,40 +130,51 @@ if __name__ == '__main__':
         ['huber', gtsam.noiseModel.Robust.Create(
                             gtsam.noiseModel.mEstimator.Huber(k=1),
                             basic_meas_noise)],
-        ['Cauchy', gtsam.noiseModel.Robust.Create(
-                            gtsam.noiseModel.mEstimator.Cauchy(k=.1),
-                            basic_meas_noise)],
-        ['DCS-.5', gtsam.noiseModel.Robust.Create(
-                            gtsam.noiseModel.mEstimator.DCS(c = 0.5),
-                            basic_meas_noise)],
-        ['DCS-1', gtsam.noiseModel.Robust.Create(
-                            gtsam.noiseModel.mEstimator.DCS(c = 1.0),
-                            basic_meas_noise)],
-        ['DCS-2', gtsam.noiseModel.Robust.Create(
-                            gtsam.noiseModel.mEstimator.DCS(c = 2.0),
-                            basic_meas_noise)],
-        ['Fair', gtsam.noiseModel.Robust.Create(
-                            gtsam.noiseModel.mEstimator.Fair(1.3998),
-                            basic_meas_noise)],
-        ['Geman', gtsam.noiseModel.Robust.Create(
-                            gtsam.noiseModel.mEstimator.GemanMcClure(1.0),
-                            basic_meas_noise)],
-        ['Tukey', gtsam.noiseModel.Robust.Create(
-                            gtsam.noiseModel.mEstimator.Tukey(4.6851),
-                            basic_meas_noise)],
+        # ['Cauchy', gtsam.noiseModel.Robust.Create(
+        #                     gtsam.noiseModel.mEstimator.Cauchy(k=.1),
+        #                     basic_meas_noise)],
+        # ['DCS-.5', gtsam.noiseModel.Robust.Create(
+        #                     gtsam.noiseModel.mEstimator.DCS(c = 0.5),
+        #                     basic_meas_noise)],
+        # ['DCS-1', gtsam.noiseModel.Robust.Create(
+        #                     gtsam.noiseModel.mEstimator.DCS(c = 1.0),
+        #                     basic_meas_noise)],
+        # ['DCS-2', gtsam.noiseModel.Robust.Create(
+        #                     gtsam.noiseModel.mEstimator.DCS(c = 2.0),
+        #                     basic_meas_noise)],
+        # ['Fair', gtsam.noiseModel.Robust.Create(
+        #                     gtsam.noiseModel.mEstimator.Fair(1.3998),
+        #                     basic_meas_noise)],
+        # ['Geman', gtsam.noiseModel.Robust.Create(
+        #                     gtsam.noiseModel.mEstimator.GemanMcClure(1.0),
+        #                     basic_meas_noise)],
+        # ['Tukey', gtsam.noiseModel.Robust.Create(
+        #                     gtsam.noiseModel.mEstimator.Tukey(4.6851),
+        #                     basic_meas_noise)],
         ['Welsch', gtsam.noiseModel.Robust.Create(
                             gtsam.noiseModel.mEstimator.Welsch(2.9846),
                             basic_meas_noise)]
     ])
 
+    if DEBUG: # change this to know which one runs...
+        in_opts = np.array([in_opts[0]])
+        est_opts = np.array([est_opts[0]])
+        which_run = 0
+        run_list=[which_run]
+        out_file = 'DEBUG'+out_file
+    else:
+        run_list = np.arange(n_runs)
+
+
     times = np.zeros((len(in_opts),len(est_opts),n_runs))
     pos_RMSEs = np.zeros((len(in_opts),len(est_opts),n_runs))
     ang_RMSEs = np.zeros((len(in_opts),len(est_opts),n_runs))
+
     # in_select and est_select control everything below
     for in_select in range(len(in_opts)):
         for est_select in range(len(est_opts)):
             print('Running input',in_opts[in_select,0], 'and estimator',est_opts[est_select,0])
-            in_path = in_opts[in_select,0]
+            in_path = in_opts[in_select,1]
             # out_file = 'RMSE_input_'+in_opts[in_select,1]+'_est_'+est_opts[est_select,0]+'.npy'
             for i in tqdm(range(n_runs)):
                 # First, read in the data from the file
@@ -182,26 +197,28 @@ if __name__ == '__main__':
                 # plt.show()
                 truth = in_data['truth']
 
-                # # When doing one run, good for plotting results
-                # fig = plt.figure()
+                if DEBUG:
+                    # When doing one run, good for plotting results
+                    fig = plt.figure()
 
-                # plt.plot(truth[:,0], truth[:,1])
-                # plt.plot(np_est_poses[:,0], np_est_poses[:,1])
-                # plt.plot(initial_np[:,0], initial_np[:,1])
-                # plt.legend(['truth', 'est', 'initial'])
-                # plt.show()
-
+                    plt.plot(truth[:,0], truth[:,1])
+                    plt.plot(np_est_poses[:,0], np_est_poses[:,1])
+                    plt.plot(initial_np[:,0], initial_np[:,1])
+                    plt.legend(['truth', 'est', 'initial'])
+                    plt.show()
 
                 RMSE = m.sqrt(np.average(np.square(truth[:,:2]- np_est_poses[:,:2])))
-                # print("RMSE (on x and y) is",RMSE)
                 RMSE_ang = m.sqrt(np.average( np.square( angleize_np_array(truth[:,2]- np_est_poses[:,2]) ) ) )
-                # print("RMSE (on angle) is",RMSE_ang)
+                if DEBUG:
+                    print("RMSE (on x and y) is",RMSE)
+                    print("RMSE (on angle) is",RMSE_ang)
+
                 pos_RMSEs[in_select,est_select,i] = RMSE
                 ang_RMSEs[in_select,est_select,i] = RMSE_ang
             # print("Average RMSEs (pos & angle) are",np.average(RMSEs,1))
             # plt.plot(RMSEs)
             # plt.show()
-    np.savez(out_file, times=times, pos_RMSEs=pos_RMSEs, ang_RMSEs=ang_RMSEs, in_opts=in_opts, est_opts=est_opts)
+    np.savez(out_file, times=times, pos_RMSEs=pos_RMSEs, ang_RMSEs=ang_RMSEs, in_opts=in_opts[:,0], est_opts=est_opts[:,0])
 
 
 # %%

@@ -3,12 +3,12 @@ import gtsam
 import numpy as np
 import math as m
 from tqdm import tqdm
-from unicycle_est_utils import switchable_error_range_known_landmark, angleize_np_array, pose2_list_to_nparray
+from unicycle_est_utils import switchable_error_range_known_landmark, angleize_np_array, pose2_list_to_nparray, switchable_constraint_error
 from functools import partial
 import copy
 import time
 
-DEBUG=True
+DEBUG=False
 if DEBUG:
     import matplotlib.pyplot as plt
 
@@ -20,7 +20,7 @@ def solve_scenario(in_data : dict,
                    dyn_noise: gtsam.noiseModel = \
                     gtsam.noiseModel.Diagonal.Sigmas(np.array([.1,.1,.02]) * m.sqrt(.1)),
                    switch_noise: gtsam.noiseModel = \
-                    gtsam.noiseModel.Isotropic.Sigma(1,.04)) \
+                    gtsam.noiseModel.Isotropic.Sigma(1,.2)) \
                 -> np.array:
     '''
     Take in a dictionary that has the 'measurements', 'inputs', 'x0', and 'landmarks' 
@@ -82,6 +82,8 @@ def solve_scenario(in_data : dict,
                                             partial(switchable_error_range_known_landmark, 
                                                     landmark_locs[jj], meas[jj] ) ) )
             # Add switching factor
+            # graph.add( gtsam.CustomFactor( switch_noise, [switch_key(jj,ii)],
+            #                                switchable_constraint_error) )
             graph.add( gtsam.PriorFactorDouble( switch_key(jj,ii), 1.0, switch_noise ) )
 
     # Graph is formed, but need some initial values for the poses and switches 
@@ -117,25 +119,40 @@ def solve_scenario(in_data : dict,
     est_poses.append(result.atPose2(pose_key(N)))
     np_est_poses = pose2_list_to_nparray(est_poses)
 
+    if DEBUG:
+        # To debug switching factors
+        # First, get all the current values of the switching factors
+        switch_values = np.zeros((len(Z),nl))
+        for ii in range(len(Z)):
+            for jj in range(nl):
+                switch_values[ii,jj] = result.atDouble(switch_key(jj,ii))
+        print('Switch Values are:\n',switch_values)
+        plt.plot(np.sqrt(switch_values[:100].flatten()))
+        plt.show()
+                            
+
+
     return initial_np, np_est_poses
+
 
 #%%
 if __name__ == '__main__':
     out_file = 'switchable_constraints_unicycle_res.npz'
-    n_runs = 100
+    n_runs = 2
     # This is a data structure that holds the directory name and
     # what the output file should say so they get picked together!
     in_opts = np.array([
-        ['no_outliers/', 'no_outlier'],
-        ['measurement_10pc_outliers/', 'meas_10pc'],
-        ['measurement_20pc_outliers/', 'meas_20pc'],
-        ['measurement_30pc_outliers/', 'meas_30pc'],
-        ['measurement_40pc_outliers/', 'meas_40pc'],
-        ['measurement_50pc_outliers/', 'meas_50pc'],
+        ['No outliers', 'no_outliers/'],
+        ['10% outliers', 'measurement_10pc_outliers/'],
+        ['20% outliers', 'measurement_20pc_outliers/'],
+        ['30% outliers', 'measurement_30pc_outliers/'],
+        ['40% outliers', 'measurement_40pc_outliers/'],
+        ['50% outliers', 'measurement_50pc_outliers/'],
     ])
-    # What weight to use on the switching model
 
+    # What weight to use on the switching model
     est_opts = np.array([
+        ['0.05', gtsam.noiseModel.Isotropic.Sigma(1,0.05)],
         ['0.1', gtsam.noiseModel.Isotropic.Sigma(1,0.1)],
         ['0.2', gtsam.noiseModel.Isotropic.Sigma(1,0.2)],
         ['0.3', gtsam.noiseModel.Isotropic.Sigma(1,0.3)],
@@ -143,23 +160,27 @@ if __name__ == '__main__':
         ['0.5', gtsam.noiseModel.Isotropic.Sigma(1,0.5)]
     ])
 
-    times = np.zeros((len(in_opts),len(est_opts),n_runs))
-    pos_RMSEs = np.zeros((len(in_opts),len(est_opts),n_runs))
-    ang_RMSEs = np.zeros((len(in_opts),len(est_opts),n_runs))
-    # in_select and est_select control everything below
     if DEBUG: # change this to know which one runs...
         in_opts = np.array([in_opts[0]])
-        est_opts = np.array([est_opts[0]])
+        est_opts = np.array([est_opts[3]])
         which_run = 0
         run_list=[which_run]
         out_file = 'DEBUG'+out_file
     else:
         run_list = np.arange(n_runs)
 
+    times = np.zeros((len(in_opts),len(est_opts),n_runs))
+    pos_RMSEs = np.zeros((len(in_opts),len(est_opts),n_runs))
+    ang_RMSEs = np.zeros((len(in_opts),len(est_opts),n_runs))
+
+    # This is considered constant for all these runs:
+    meas_noise = gtsam.noiseModel.Isotropic.Sigma( 1, 1.0 )
+
+    # in_select and est_select control everything below
     for in_select in range(len(in_opts)):
         for est_select in range(len(est_opts)):
             print('Running input',in_opts[in_select,0], 'and estimator',est_opts[est_select,0])
-            in_path = in_opts[in_select,0]
+            in_path = in_opts[in_select,1]
             # out_file = 'RMSE_input_'+in_opts[in_select,1]+'_est_'+est_opts[est_select,0]+'.npy'
             for ii in tqdm(run_list):
                 # First, read in the data from the file
@@ -168,22 +189,20 @@ if __name__ == '__main__':
 
                 in_data['x0'] = np.array([0, 0, m.pi/2])
 
-                # Decide what cost function we will use for the measurements
-                meas_noise = est_opts[est_select,1]
+                # Decide what cost function we will use for the switching factors
+                switch_noise = est_opts[est_select,1]
 
                 ########   
                 # Now run the optimziation (with whatever noise model you have)    
                 start_time = time.time()
-                initial_np, np_est_poses = solve_scenario(in_data, meas_noise=meas_noise)
+                initial_np, np_est_poses = solve_scenario(in_data, switch_noise = switch_noise)
                 end_time = time.time()
                 times[in_select,est_select,ii] = end_time - start_time
 
-
-                # plt.plot(np_est_poses)
-                # plt.show()
                 truth = in_data['truth']
 
                 if DEBUG:
+
                     # When doing one run, good for plotting results
                     fig = plt.figure()
 
@@ -204,6 +223,6 @@ if __name__ == '__main__':
             # print("Average RMSEs (pos & angle) are",np.average(RMSEs,1))
             # plt.plot(RMSEs)
             # plt.show()
-    np.savez(out_file, times=times, pos_RMSEs=pos_RMSEs, ang_RMSEs=ang_RMSEs, in_opts=in_opts, est_opts=est_opts)
+    np.savez(out_file, times=times, pos_RMSEs=pos_RMSEs, ang_RMSEs=ang_RMSEs, in_opts=in_opts[:,0], est_opts=est_opts[:,0])
 
 # %%

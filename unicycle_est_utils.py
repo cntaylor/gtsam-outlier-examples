@@ -61,6 +61,17 @@ def error_range_known_landmark(landmark_loc: np.ndarray, measurement: float,
     
     return np.array([error])
 
+def switchable_constraint_error(this: gtsam.CustomFactor, values: gtsam.Values,
+                                jacobians: Optional[List[np.ndarray]]) -> np.ndarray:
+    '''
+    This is just me testing out the "Prior" factor as it does things
+    I'm not expecting.  This tests if it does what I think it should
+    '''
+    switch_value = values.atDouble(this.keys()[0])
+    if jacobians is not None:
+        jacobians[0] = np.array([1])
+    return np.array([switch_value-1.0])
+
 def switchable_error_range_known_landmark(landmark_loc: np.ndarray, measurement: float, 
                                this: gtsam.CustomFactor, values: gtsam.Values, 
                                jacobians: Optional[List[np.ndarray]]) -> np.ndarray:
@@ -93,7 +104,7 @@ def switchable_error_range_known_landmark(landmark_loc: np.ndarray, measurement:
     # throw off the math, so just make sure it doesnt... (while getting the value)
     sw_key = this.keys()[1] # switching constraint key
     orig_switch = max(0,values.atDouble(sw_key))
-    # I do sqrt because I want to switch to scale the squared error, not (possibly negative) error
+    # I do sqrt because I want the switch to scale the squared error, not (possibly negative) error
     switch = m.sqrt(orig_switch)
     np_est_loc = np.array([est_loc.x(), est_loc.y(), est_loc.theta()])
     diff_loc = np_est_loc[:2] - landmark_loc
@@ -113,7 +124,7 @@ def switchable_error_range_known_landmark(landmark_loc: np.ndarray, measurement:
         jacobians[0] = range_deriv.reshape(1,3)
         # Maybe I don't need to, but I am worried about the / orig_switch value (the correct value)
         # being numerically stable as the switch value approaches 0
-        jacobians[1] = np.array([uw_error * 0.5/(orig_switch+epsilon)]).reshape(1,1)
+        jacobians[1] = np.array([uw_error * 0.5/(switch+epsilon)]).reshape(1,1)
     
     return np.array([error])
 
