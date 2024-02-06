@@ -138,7 +138,7 @@ def solve_scenario(in_data : dict,
 #%%
 if __name__ == '__main__':
     out_file = 'switchable_constraints_unicycle_res.npz'
-    n_runs = 2
+    n_runs = 100
     # This is a data structure that holds the directory name and
     # what the output file should say so they get picked together!
     in_opts = np.array([
@@ -223,6 +223,8 @@ if __name__ == '__main__':
             # print("Average RMSEs (pos & angle) are",np.average(RMSEs,1))
             # plt.plot(RMSEs)
             # plt.show()
-    np.savez(out_file, times=times, pos_RMSEs=pos_RMSEs, ang_RMSEs=ang_RMSEs, in_opts=in_opts[:,0], est_opts=est_opts[:,0])
+    est_save = est_opts[:,0].astype(str)
+    in_opts_save = in_opts[:,0].astype(str)
+    np.savez(out_file, times=times, pos_RMSEs=pos_RMSEs, ang_RMSEs=ang_RMSEs, in_opts=in_opts_save, est_opts=est_save)
 
 # %%

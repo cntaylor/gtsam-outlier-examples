@@ -109,17 +109,17 @@ def solve_scenario(in_data : dict,
 
 #%%
 if __name__ == '__main__':
-    out_file = 'test_basic_graph_unicycle_res.npz'
-    n_runs = 50
+    out_file = 'basic_graph_unicycle_res.npz'
+    n_runs = 100
     # This is a data structure that holds the directory name and
     # what the output file should say so they get picked together!
     in_opts = np.array([
         ['No outliers', 'no_outliers/'],
         ['10% outliers', 'measurement_10pc_outliers/'],
-        # ['20% outliers', 'measurement_20pc_outliers/'],
-        # ['30% outliers', 'measurement_30pc_outliers/'],
-        # ['40% outliers', 'measurement_40pc_outliers/'],
-        ['50% outliers', 'measurement_50pc_outliers/'],
+        ['20% outliers', 'measurement_20pc_outliers/'],
+        ['30% outliers', 'measurement_30pc_outliers/'],
+        ['40% outliers', 'measurement_40pc_outliers/'],
+        ['50% outliers', 'measurement_50pc_outliers/']
     ])
     # The basic Gaussian noise model assumed
     basic_meas_noise = \
@@ -130,27 +130,27 @@ if __name__ == '__main__':
         ['huber', gtsam.noiseModel.Robust.Create(
                             gtsam.noiseModel.mEstimator.Huber(k=1),
                             basic_meas_noise)],
-        # ['Cauchy', gtsam.noiseModel.Robust.Create(
-        #                     gtsam.noiseModel.mEstimator.Cauchy(k=.1),
-        #                     basic_meas_noise)],
-        # ['DCS-.5', gtsam.noiseModel.Robust.Create(
-        #                     gtsam.noiseModel.mEstimator.DCS(c = 0.5),
-        #                     basic_meas_noise)],
-        # ['DCS-1', gtsam.noiseModel.Robust.Create(
-        #                     gtsam.noiseModel.mEstimator.DCS(c = 1.0),
-        #                     basic_meas_noise)],
-        # ['DCS-2', gtsam.noiseModel.Robust.Create(
-        #                     gtsam.noiseModel.mEstimator.DCS(c = 2.0),
-        #                     basic_meas_noise)],
-        # ['Fair', gtsam.noiseModel.Robust.Create(
-        #                     gtsam.noiseModel.mEstimator.Fair(1.3998),
-        #                     basic_meas_noise)],
-        # ['Geman', gtsam.noiseModel.Robust.Create(
-        #                     gtsam.noiseModel.mEstimator.GemanMcClure(1.0),
-        #                     basic_meas_noise)],
-        # ['Tukey', gtsam.noiseModel.Robust.Create(
-        #                     gtsam.noiseModel.mEstimator.Tukey(4.6851),
-        #                     basic_meas_noise)],
+        ['Cauchy', gtsam.noiseModel.Robust.Create(
+                            gtsam.noiseModel.mEstimator.Cauchy(k=.1),
+                            basic_meas_noise)],
+        ['DCS-.5', gtsam.noiseModel.Robust.Create(
+                            gtsam.noiseModel.mEstimator.DCS(c = 0.5),
+                            basic_meas_noise)],
+        ['DCS-1', gtsam.noiseModel.Robust.Create(
+                            gtsam.noiseModel.mEstimator.DCS(c = 1.0),
+                            basic_meas_noise)],
+        ['DCS-2', gtsam.noiseModel.Robust.Create(
+                            gtsam.noiseModel.mEstimator.DCS(c = 2.0),
+                            basic_meas_noise)],
+        ['Fair', gtsam.noiseModel.Robust.Create(
+                            gtsam.noiseModel.mEstimator.Fair(1.3998),
+                            basic_meas_noise)],
+        ['Geman', gtsam.noiseModel.Robust.Create(
+                            gtsam.noiseModel.mEstimator.GemanMcClure(1.0),
+                            basic_meas_noise)],
+        ['Tukey', gtsam.noiseModel.Robust.Create(
+                            gtsam.noiseModel.mEstimator.Tukey(4.6851),
+                            basic_meas_noise)],
         ['Welsch', gtsam.noiseModel.Robust.Create(
                             gtsam.noiseModel.mEstimator.Welsch(2.9846),
                             basic_meas_noise)]
@@ -218,7 +218,11 @@ if __name__ == '__main__':
             # print("Average RMSEs (pos & angle) are",np.average(RMSEs,1))
             # plt.plot(RMSEs)
             # plt.show()
-    np.savez(out_file, times=times, pos_RMSEs=pos_RMSEs, ang_RMSEs=ang_RMSEs, in_opts=in_opts[:,0], est_opts=est_opts[:,0])
+    # Required to load est_save back in from the .npz file
+    est_save = est_opts[:,0].astype(str)
+    in_opts_save = in_opts[:,0]
+    np.savez(out_file, times=times, pos_RMSEs=pos_RMSEs, ang_RMSEs=ang_RMSEs, in_opts=in_opts_save, est_opts=est_save)
+    print(est_save)
 
 
 # %%

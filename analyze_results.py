@@ -19,8 +19,8 @@ for ii, ax in enumerate(axs):
     data_to_plot = [pos_RMSEs[ii, jj, :] for jj in range(len(est_opts))]
     ax.violinplot(data_to_plot)
     ax.set_xticks(np.arange(1, len(est_opts) + 1))
-    ax.set_xticklabels(est_opts[:, 0])
-    ax.set_title(in_opts[ii, 0])
+    ax.set_xticklabels(est_opts)
+    ax.set_title(in_opts[ii])
     ax.set_xlabel('Estimation Options')
     ax.set_ylabel('Position RMSE (m)')
 
@@ -29,10 +29,10 @@ plt.tight_layout()
 fig2, axs = plt.subplots(len(in_opts), 1, figsize=(10, len(in_opts) * 5))
 for ii, ax in enumerate(axs):
     data_to_plot = [ang_RMSEs[ii, jj, :] for jj in range(len(est_opts))]
-    ax.violinplot(data_to_plot*180/np.pi)
+    ax.violinplot(np.array(data_to_plot).T * 180.0/np.pi)
     ax.set_xticks(np.arange(1, len(est_opts) + 1))
-    ax.set_xticklabels(est_opts[:, 0])
-    ax.set_title(in_opts[ii, 0])
+    ax.set_xticklabels(est_opts[:])
+    ax.set_title(in_opts[ii])
     ax.set_xlabel('Estimation Options')
     ax.set_ylabel('Angular RMSE (degrees)')
 
@@ -43,8 +43,8 @@ for ii, ax in enumerate(axs):
     data_to_plot = [time_res[ii, jj, :] for jj in range(len(est_opts))]
     ax.violinplot(data_to_plot)
     ax.set_xticks(np.arange(1, len(est_opts) + 1))
-    ax.set_xticklabels(est_opts[:, 0])
-    ax.set_title(in_opts[ii, 0])
+    ax.set_xticklabels(est_opts[:])
+    ax.set_title(in_opts[ii])
     ax.set_xlabel('Estimation Options')
     ax.set_ylabel('Time to Run (s)')
 
