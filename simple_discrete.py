@@ -48,7 +48,7 @@ def create_measurements(truth : float,
 
 ### This is bad coding practice, but this is just a test, so...
 # define some symbols here for use throughout the rest of the file
-prior_var = 16. # variance on the prior factor
+prior_var = 1. # variance on the prior factor
 main_hv = gtsam.symbol('x',0) # main hidden variable
 # outlier hidden variable 'key' 
 outlier_hv = lambda i : gtsam.symbol('o',i)
@@ -70,7 +70,7 @@ def create_graph(Z : np.array, prior_val: float,
     
     graph = gtsam.HybridNonlinearFactorGraph()
     graph.push_back(gtsam.PriorFactorDouble(main_hv, prior_val, prior_noise) )
-    for i in range(1):
+    for i in range(len(Z)):
         # Python bindings for gtsam and DiscreteKeys are not great yet (Feb 2024)
         # Need to create a DiscreteKeys object here
         dk = gtsam.DiscreteKeys()
@@ -86,24 +86,26 @@ def create_graph(Z : np.array, prior_val: float,
 #%%
 if __name__ == '__main__':
     # scalars that control the environment
-    N = 10 # number of measurements to create
-    outlier_prob = 0.000000001 # probability of each measurement to be corrupted by an outlier
-    outlier_mult = 15. # What to multiply S_R by to get the outlier covariance
-    R = prior_var #1. # variance value used to do non-outlier noise
+    N = 1 # number of measurements to create
+    outlier_prob = 0.000000003 # probability of each measurement to be corrupted by an outlier
+    outlier_mult = 10. # What to multiply S_R by to get the outlier covariance
+    R = 1. # variance value used to do non-outlier noise
 
     # First, setup the prior values
     truth = 5.
     prior_val = truth + np.random.randn() * m.sqrt(prior_var)
     Z, outlier_truth = create_measurements(truth, N, outlier_prob, outlier_mult, R)
-    Z[0] = prior_val
-    graph = create_graph(Z, prior_val, R, outlier_mult=1.1)
+    Z[0] = prior_val+.1
+    graph = create_graph(Z, prior_val, R, outlier_mult)
     values = gtsam.Values()
     values.insert(main_hv, prior_val)
-    # for i in range(N):
-    #     values.insert(outlier_hv(i), 0)
+    for i in range(N):
+        values.insert(outlier_hv(i), 0)
+    print('prior_val is ',prior_val)
     # Now, evaluate the graph
     curr_lin_graph = graph.linearize(values)
     forward_pass = curr_lin_graph.eliminateSequential()
+    print('forward_pass', forward_pass)
     res_values = forward_pass.optimize()
 
     # So, the problem is res_values returns the solution to the
@@ -111,7 +113,11 @@ if __name__ == '__main__':
     # to get you closer to the solution, but not the solution itself.
 
     # Now, plot the results
+    print('Res_values',res_values)
+    print('True outliers',outlier_truth)
     print('The true value is', truth, 'the final estimate was', res_values.at(main_hv) + values.atDouble(main_hv))
+    print('measurements were', Z)
+
 
     # Plotting the bar chart for outlier_truth vs backward_pass values
     outlier_estimates = [res_values.atDiscrete(outlier_hv(i)) for i in range(N)]
