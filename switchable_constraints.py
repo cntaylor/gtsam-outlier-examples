@@ -152,12 +152,12 @@ if __name__ == '__main__':
 
     # What weight to use on the switching model
     est_opts = np.array([
-        ['0.05', gtsam.noiseModel.Isotropic.Sigma(1,0.05)],
-        ['0.1', gtsam.noiseModel.Isotropic.Sigma(1,0.1)],
-        ['0.2', gtsam.noiseModel.Isotropic.Sigma(1,0.2)],
-        ['0.3', gtsam.noiseModel.Isotropic.Sigma(1,0.3)],
-        ['0.4', gtsam.noiseModel.Isotropic.Sigma(1,0.4)],
-        ['0.5', gtsam.noiseModel.Isotropic.Sigma(1,0.5)]
+        ['SC-0.05', gtsam.noiseModel.Isotropic.Sigma(1,0.05)],
+        ['SC-0.1', gtsam.noiseModel.Isotropic.Sigma(1,0.1)],
+        ['SC-0.2', gtsam.noiseModel.Isotropic.Sigma(1,0.2)],
+        ['SC-0.3', gtsam.noiseModel.Isotropic.Sigma(1,0.3)],
+        ['SC-0.4', gtsam.noiseModel.Isotropic.Sigma(1,0.4)],
+        ['SC-0.5', gtsam.noiseModel.Isotropic.Sigma(1,0.5)]
     ])
 
     if DEBUG: # change this to know which one runs...
