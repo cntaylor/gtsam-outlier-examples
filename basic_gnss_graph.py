@@ -16,7 +16,7 @@ import time
 from gnss_est_utils import get_chemnitz_data, error_psuedorange, init_pos, error_clock
 
 
-DEBUG=True
+DEBUG=False
 if DEBUG:
     import matplotlib.pyplot as plt
 
@@ -64,6 +64,8 @@ def solve_scenario(gnss_data : np.array,
         initial_estimates.insert( pose_key(ii), init_pos( meas_list ) )
 
     ## Everything should be set up. Now to optimize
+        # TODO:  Dogleg optimization
+        # TODO: relativeDecrease termination of 1E-3
     parameters = gtsam.GaussNewtonParams()
     parameters.setMaxIterations(100)
     parameters.setVerbosity("ERROR")
@@ -118,7 +120,6 @@ if __name__ == '__main__':
 
     if DEBUG: # change this to know which one runs...
         est_opts = np.array([est_opts[0]])
-
         out_file = 'DEBUG'+out_file
 
     times = np.zeros(len(est_opts))
@@ -135,16 +136,19 @@ if __name__ == '__main__':
 
         in_data = get_chemnitz_data()
         if DEBUG:
-            run_length = 2500
+            run_length = 500
         else:
-            run_length = len(in_data)
+            run_length = 4000 #len(in_data)
         ########   
         # Now run the optimziation (with whatever noise model you have)    
         start_time = time.time()
         np_est_poses = solve_scenario(in_data[:run_length], meas_noise=meas_noise)
         end_time = time.time()
         times[est_select] = end_time - start_time
-
+        data_out_file = 'data_basic_graph_gnss_res_'+est_opts[est_select,0]+'.npz'
+        if DEBUG:
+            data_out_file = "DEBUG_"+data_out_file
+        np.savez(data_out_file, est_states=np_est_poses)
         # plt.plot(np_est_poses)
         # plt.show()
         truth = np.array([in_data[i,1] for i in range(run_length)])

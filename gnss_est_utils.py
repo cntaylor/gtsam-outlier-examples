@@ -5,7 +5,10 @@ import math as m
 from typing import List, Optional
 import numpy as np
 
+time_divider=1E6
 c = 2.99792458E8 # m/s, speed of light
+c_small = c/time_divider # speed of light in smaller time units (to make solving more numerically stable)
+
 def get_chemnitz_data(filename = 'Data_Chemnitz.csv') -> np.array:
     '''
     Read the chemnitz data. This code is full of magic numbers, etc.  The file I know of
@@ -65,8 +68,8 @@ def init_pos(pseudorange_list: List[np.ndarray]) -> np.ndarray:
             diff_loc = tmp_var[:3] - pseudorange_list[i][2:5]
             dist = np.sqrt(np.sum(np.square(diff_loc)))
             A[i,:3] = diff_loc/dist
-            A[i,3] = c
-            est_pseudo[i] = dist + tmp_var[3]*c
+            A[i,3] = c_small
+            est_pseudo[i] = dist + tmp_var[3]*c_small
         y = z - est_pseudo
         delta_tmp_var = la.pinv(A) @ y
         tmp_var[:4] += delta_tmp_var
@@ -125,13 +128,13 @@ def error_psuedorange(measurement: float, satellite_loc: np.ndarray,
     curr_state = values.atVector(key)
     diff_loc = curr_state[:3] - satellite_loc
     pred_range = np.sqrt(np.sum(np.square(diff_loc))) 
-    error = pred_range + curr_state[3]*c - measurement 
+    error = pred_range + curr_state[3]*c_small - measurement 
     # print('Error',error,'pred_range',pred_range,'measurement',measurement,'landmakr_loc',landmark_loc)
 
     if jacobians is not None:
         prange_deriv = np.zeros((1,5))
         prange_deriv[0,:3] = diff_loc/pred_range
-        prange_deriv[0,3] = c
+        prange_deriv[0,3] = c_small
         jacobians[0] = prange_deriv
 
     
@@ -148,63 +151,58 @@ def switchable_constraint_error(this: gtsam.CustomFactor, values: gtsam.Values,
         jacobians[0] = np.array([1])
     return np.array([switch_value-1.0])
 
-# def switchable_error_range_known_landmark(landmark_loc: np.ndarray, measurement: float, 
-#                                this: gtsam.CustomFactor, values: gtsam.Values, 
-#                                jacobians: Optional[List[np.ndarray]]) -> np.ndarray:
-#     '''
-#     This is a custom factor for GTSAM. It takes in a known landmark location and the 
-#     measured range, returning the error and the Jacobians of the measurement (as needed).
-#     Assume you will pass in the pose and the switch hidden variables (in that order)
+def switchable_error_pseudorange(satellite_loc: np.ndarray, measurement: float,
+                                 this: gtsam.CustomFactor, values: gtsam.Values, 
+                                 jacobians: Optional[List[np.ndarray]]) -> np.ndarray:
+    '''
+    This is a custom factor for GTSAM. It takes in a known satellite location and the 
+    measured pseudo range, returning the error and the Jacobians of the measurement (as needed).
+    Assume you will pass in the state and the switch hidden variables (in that order)
     
-#     Inputs:
-#         landmark_loc: a 2-element numpy vector that has the location of the landmark
-#         measurement: scalar measurement between current robot location and landmark
-#         this: Makes it callable by gtsam as a custom factor
-#         values: gtsam.Values, but in this case should give me a robot location (Pose2) 
-#                 and a switch (float) value
-#         jacobians: If required, lets me pass out the H matrix (d (measurement*switch) / d pose2) &
-#                     (d (measurement*switch) / d switch)
+    Inputs:
+        satellite_loc: a 3-element vector (x,y,z)
+        measurement: pseudo-range measurement between receiver location and satellite
+        this: Makes it callable by gtsam as a custom factor
+        values: gtsam.Values, but in this case should give me a state (5-element vector)
+                and a switch (float) value
+        jacobians: If required, lets me pass out the H matrix (d (measurement*switch) / d state) &
+                    (d (measurement*switch) / d switch)
     
-#     Output: the error between the predicted range and the measurements (h(x) - z), 
-#             weighted by the scaling factor
-#     '''
+    Output: the error between the predicted range and the measurements (h(x) - z), 
+            weighted by the scaling factor
+    '''
 
-#     # Wanted to make this a parameter that can be passed in, but turns out
-#     # to be rather difficult with how this interacts with GTSAM.  So,
-#     # it is now set at the beginning of the function :(
-#     epsilon = 1E-5
+    # Wanted to make this a parameter that can be passed in, but turns out
+    # to be rather difficult with how this interacts with GTSAM.  So,
+    # it is now set at the beginning of the function :(
+    epsilon = 1E-5
     
-#     key_pose = this.keys()[0]
-#     est_loc = values.atPose2(key_pose)
-#     # I don't know if this is needed or not, but if the switch goes negative, that would
-#     # throw off the math, so just make sure it doesnt... (while getting the value)
-#     sw_key = this.keys()[1] # switching constraint key
-#     orig_switch = max(0,values.atDouble(sw_key))
-#     # I do sqrt because I want the switch to scale the squared error, not (possibly negative) error
-#     switch = m.sqrt(orig_switch)
-#     np_est_loc = np.array([est_loc.x(), est_loc.y(), est_loc.theta()])
-#     diff_loc = np_est_loc[:2] - landmark_loc
-#     pred_range = np.sqrt(np.sum(np.square(diff_loc)))
-#     uw_error = pred_range - measurement # unweighted error
-#     error = uw_error * switch
-#     # print('Error',error,'pred_range',pred_range,'measurement',measurement,'landmakr_loc',landmark_loc)
+    key_pose = this.keys()[0]
+    curr_state = values.atVector(key_pose)
+    # print('Error',error,'pred_range',pred_range,'measurement',measurement,'landmakr_loc',landmark_loc)
 
-#     if jacobians is not None:
-#         # Have to be careful with Jacobians. They are not with respect to the
-#         # full state, but rather the error state.  
-#         range_deriv = np.array([diff_loc[0]/pred_range, diff_loc[1]/pred_range, 0])
-#         # Now rotate into the error space for Pose2
-#         theta = est_loc.theta()
-#         DCM = np.array([np.cos(theta), -np.sin(theta), np.sin(theta), np.cos(theta)]).reshape(2,2)
-#         range_deriv[:2] = switch * range_deriv[:2] @ DCM
-#         jacobians[0] = range_deriv.reshape(1,3)
-#         # Maybe I don't need to, but I am worried about the / orig_switch value (the correct value)
-#         # being numerically stable as the switch value approaches 0
-#         jacobians[1] = np.array([uw_error * 0.5/(switch+epsilon)]).reshape(1,1)
+    # I don't know if this is needed or not, but if the switch goes negative, that would
+    # throw off the math, so just make sure it doesnt... (while getting the value)
+    sw_key = this.keys()[1] # switching constraint key
+    orig_switch = max(0,values.atDouble(sw_key))
+    # I do sqrt because I want the switch to scale the squared error, not (possibly negative) error
+    switch = m.sqrt(orig_switch)
+    diff_loc = curr_state[:3] - satellite_loc
+    pred_range = np.sqrt(np.sum(np.square(diff_loc))) 
+    uw_error = pred_range + curr_state[3]*c_small - measurement 
+    error = uw_error * switch
+
+    if jacobians is not None:
+        prange_deriv = np.zeros((1,5))
+        prange_deriv[0,:3] = diff_loc/pred_range
+        prange_deriv[0,3] = c_small
+        jacobians[0] = prange_deriv * switch
+
+        # Maybe I don't need to, but I am worried about the / orig_switch value (the correct value)
+        # being numerically stable as the switch value approaches 0
+        jacobians[1] = np.array([uw_error * 0.5/(switch+epsilon)]).reshape(1,1)
     
-#     return np.array([error])
-
-
+    return np.array([error])
 
 if __name__ == "__main__":
     gnss_data = get_chemnitz_data()
