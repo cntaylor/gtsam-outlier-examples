@@ -78,8 +78,9 @@ def init_pos(pseudorange_list: List[np.ndarray],
         tmp_var[:4] += delta_tmp_var
         if la.norm(delta_tmp_var) < 5.: # Don't need it really exact
             done=True
-        if res_cov is not None:
-            res_cov = la.inv(A.T @ A)
+    if res_cov is not None:
+        res_cov[:4,:4] = la.inv(A.T @ A) # Make it modify res_cov
+
     return tmp_var
 
 def error_clock(time_diff: float, this: gtsam.CustomFactor, values: gtsam.Values, jacobians: Optional[List[np.ndarray]]) -> np.ndarray:

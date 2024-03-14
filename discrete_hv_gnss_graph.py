@@ -8,6 +8,7 @@ from gnss_est_utils import time_divider, c_small, get_chemnitz_data, init_pos
 from functools import partial
 import copy
 import time
+from numba import jit
 
 DEBUG=False
 if DEBUG:
@@ -63,7 +64,6 @@ def solve_scenario(gnss_data: np.array,
         # from the current estimated covariance, then compute the full probability
         # First, remove the effect of the measurement from the information matrix
         # Note that vec_inf is assumed to be 4x4 as I ignore clock rate error 
-        diff_loc = vec_est[:3] - meas[2:]
         diff_loc_uv = diff_loc / la.norm(diff_loc) # uv = unit vector
         full_deriv = np.array([diff_loc_uv[0], diff_loc_uv[1], diff_loc_uv[2], c_small])
         meas_proj = full_deriv / la.norm(full_deriv)
@@ -129,15 +129,16 @@ def solve_scenario(gnss_data: np.array,
     initial_locs = np.zeros((len(gnss_data),5))
     for ii,data in enumerate(gnss_data):
         meas_list = data[2]
-        loc_cov = np.array((4,4))
+        loc_cov = np.empty((4,4), dtype=float)
         initial_locs[ii] = init_pos(meas_list, loc_cov)
         initial_estimates.insert( pose_key(ii), initial_locs[ii] )
+        loc_inf = la.inv(loc_cov)
         # Go through and initialize the outlier discrete values as well
         for jj,meas in enumerate(meas_list):
             
             # Compute whether each one should be an inlier or an outlier
-            inlier_prob = compute_prob_full( meas, meas_noise.covariance().item(), initial_locs[ii], la.inv(loc_cov))
-            outlier_prob = compute_prob_full( meas, outlier_noise.covariance().item(), initial_locs[ii], la.inv(loc_cov))
+            inlier_prob = compute_prob_full( meas, meas_noise.covariance().item(), initial_locs[ii], loc_inf)
+            outlier_prob = compute_prob_full( meas, outlier_noise.covariance().item(), initial_locs[ii], loc_inf)
             outlier_bools[ii,jj] = outlier_prob > inlier_prob
     # Everything should be set up. Now to optimize
     ## This is essentially an EM (expectation maximization) algorithm.
@@ -151,7 +152,7 @@ def solve_scenario(gnss_data: np.array,
     num_loops = 0
     ############# The Optimization Loop #############
     # This is the EM loop
-    while num_loops < 20 and (not outlier_not_changed_count==2): # optimization iterations ... a stupid, but simple way to start
+    while num_loops < 35 and (not outlier_not_changed_count==2): # optimization iterations ... a stupid, but simple way to start
         # Optimize the continuous graph
         if outlier_not_changed_count == 1:  # if the outlier values have not changed, let the continuous optimize more
             parameters.setMaxIterations(20)
@@ -203,11 +204,11 @@ if __name__ == '__main__':
 
     # What weight to use on the switching model
     est_opts = np.array([
-        ['DI', gtsam.noiseModel.Isotropic.Sigma(1,1000)]
+        ['DI', gtsam.noiseModel.Isotropic.Sigma(1,1000.)]
     ])
 
     if DEBUG: # change this to know which one runs...
-        est_opts = np.array([est_opts[3]])
+        est_opts = np.array([est_opts[0]])
         out_file = 'DEBUG'+out_file
 
     times = np.zeros(len(est_opts))
@@ -225,19 +226,19 @@ if __name__ == '__main__':
 
         in_data = get_chemnitz_data()
         if DEBUG:
-            run_length = 4
+            run_length = 10
         else:
             run_length = len(in_data)
         ########   
         # Now run the optimziation (with whatever noise model you have)    
         start_time = time.time()
-        np_est_poses = solve_scenario(in_data[:run_length], outlier_noise=outlier_noise)
+        init_poses, np_est_poses = solve_scenario(in_data[:run_length], outlier_noise=outlier_noise)
         end_time = time.time()
         times[est_select] = end_time - start_time
         data_out_file = 'data_discrete_ind_gnss_res_'+est_opts[est_select,0]+'.npz'
         if DEBUG:
             data_out_file = "DEBUG_"+data_out_file
-        np.savez(data_out_file, est_states=np_est_poses)
+        np.savez(data_out_file, est_states=np_est_poses, init_poses = init_poses)
 
         # plt.plot(np_est_poses)
         # plt.show()
