@@ -18,7 +18,7 @@ def get_chemnitz_data(filename = 'Data_Chemnitz.csv') -> np.array:
         Big array of # times x 3.  Columns will be:
             0: Time in experiment
             1: ground truth (3 element numpy array -- x,y,z of GNSS receiver)
-            2: GNSS data -- a (variable length) list of 4-element numpy arrays.  5 elements are 
+            2: GNSS data -- a (variable length) list of 5-element numpy arrays.  5 elements are 
                 [satellite ID, pseudo-range, x,y,z of satellite]
     '''
     # TODO:  have it return a pandas table?
@@ -49,11 +49,14 @@ def get_chemnitz_data(filename = 'Data_Chemnitz.csv') -> np.array:
     
     return going_out
 
-def init_pos(pseudorange_list: List[np.ndarray]) -> np.ndarray:
+def init_pos(pseudorange_list: List[np.ndarray],
+             res_cov : Optional[np.array] = None) -> np.ndarray:
     '''
     This takes in a list of pseudoranges (the list put into the 
     3rd column in get_chemnitz_data) and returns the initial
-    GNSS position (x,y,z)
+    GNSS position and time (x,y,z,t,0)
+
+    if res_cov is not None, return the estimated covariance of the position & time measurement in res_cov
     '''
     assert len(pseudorange_list) >= 4, "Need at least 4 pseudoranges"
     tmp_var = np.zeros(5)
@@ -75,6 +78,8 @@ def init_pos(pseudorange_list: List[np.ndarray]) -> np.ndarray:
         tmp_var[:4] += delta_tmp_var
         if la.norm(delta_tmp_var) < 5.: # Don't need it really exact
             done=True
+        if res_cov is not None:
+            res_cov = la.inv(A.T @ A)
     return tmp_var
 
 def error_clock(time_diff: float, this: gtsam.CustomFactor, values: gtsam.Values, jacobians: Optional[List[np.ndarray]]) -> np.ndarray:

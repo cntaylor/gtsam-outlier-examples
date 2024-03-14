@@ -4,7 +4,7 @@ import numpy as np
 import numpy.linalg as la
 import math as m
 from tqdm import tqdm
-from unicycle_est_utils import error_range_known_landmark, angleize_np_array, pose2_list_to_nparray
+from gnss_est_utils import time_divider, c_small, get_chemnitz_data, init_pos
 from functools import partial
 import copy
 import time
@@ -13,72 +13,78 @@ DEBUG=False
 if DEBUG:
     import matplotlib.pyplot as plt
 
-
-    
-def solve_scenario(in_data : dict, 
-                   dt : float = .1,
+def solve_scenario(gnss_data: np.array,
                    meas_noise: gtsam.noiseModel = \
                     gtsam.noiseModel.Isotropic.Sigma(1,1.),
                    outlier_noise: gtsam.noiseModel = \
                     gtsam.noiseModel.Isotropic.Sigma(1,1000.),
-                   dyn_noise: gtsam.noiseModel = \
-                    gtsam.noiseModel.Diagonal.Sigmas(np.array([.1,.1,.02]) * m.sqrt(.1)) ) \
-                -> np.array:
+                   dyn_Q_diags : np.array = np.array([4E-19, 1.4E-18]) ) \
+                -> tuple[np.array, np.array]:
     '''
-    Take in a dictionary that has the 'measurements', 'inputs', 'x0', and 'landmarks' 
-    locations in it.  Create a graph and return the optimized results as a np.array.  
-    To solve the discrete, I will have to form a graph multiple times with different
-    noise factors depending on what the discrete values are.  Each measurement has a 
-    discrete variable that decides whether it will be an outlier or not.
+    Take in a numpy array with all the data in it (see get_chemnitz_data for format),
+    create a graph to handle it, and solve it.  The switch_noise input
+    is a Gaussian noise model for the switch constraint, i.e. how strong the bias to 
+    the measurement being valid should (the smaller the noise, the stronger the bias)
 
     Inputs:
-        input_meas_dict: the dictionary with the required information
-        dt: the timestep between states (used with inputs to propagate)
+        gnss_data:  the array with all the measurements and timestamps (and ground truth) in it
         meas_noise:  What noise model to use with the measurements
-        outlier_noise: What noise model to use with the outliers
         dyn_noise: What noise model to use with the dyanmics factors
+        switch_noise: What noise model (weighting) to use with the switch constraint
 
     Outputs:
-        A Nx3 np.array with the output poses
+        A tuple with:
+         (1) Nx5 np.array with the output poses
+         (2) Nxmax_sats np.array with binary values whether outlier (true) or not
 
     '''
-
-    Z = in_data['measurements'] # Z is the set of all measurements
-    N = len(Z)
-    U = in_data['inputs'] # U is the set of all inputs, should be length N (which had -1 to get it)
-    assert len(U)==N-1, "inputs and measurements have incompatible length"
-    landmark_locs = in_data['landmarks']
-
-    x0 = in_data['x0']
+    bcn_dyn_Q_diags = dyn_Q_diags * time_divider**2 # bcn = better condition number... Makes GTSAM happier
+    # For a weak dynamics between positions, do 30 m/s, so running 60 miles/hour (approx) is only 1 sigma
+    complete_dyn_Q_diags = np.ones(5)*900.
+    complete_dyn_Q_diags[3:] = bcn_dyn_Q_diags
 
     ## Functions for creating keys -- identifiers for hidden variables
-    nl = len(landmark_locs) # number of landmarks
     pose_key = lambda x: gtsam.symbol('x',x)
+
+    # Calculate the number of bits needed to represent the maximum number of satellites
+    num_sats = np.array([len(gnss_data[ii,2]) for ii in range(len(gnss_data))])
+    nl = np.max(num_sats)
+
     # Array for holding outlier discrete values
-    outlier_bools = np.empty((N,nl), dtype=bool)
+    outlier_bools = np.empty((len(gnss_data),nl), dtype=bool)
 
     def compute_prob(diff: float, cov : float) -> float:
         # Compute the probability according to the full normal distribution
         # MUST include the scaling factor!
         return m.exp(-.5*diff**2/cov ) * 1/m.sqrt(2*m.pi*cov)
+    
+    def compute_prob_full(meas : np.array, meas_cov: float, vec_est : np.array, vec_inf : np.array) -> float:
+        # Compute the probability by removing the effect of the measurement
+        # from the current estimated covariance, then compute the full probability
+        # First, remove the effect of the measurement from the information matrix
+        # Note that vec_inf is assumed to be 4x4 as I ignore clock rate error 
+        diff_loc = vec_est[:3] - meas[2:]
+        diff_loc_uv = diff_loc / la.norm(diff_loc) # uv = unit vector
+        full_deriv = np.array([diff_loc_uv[0], diff_loc_uv[1], diff_loc_uv[2], c_small])
+        meas_proj = full_deriv / la.norm(full_deriv)
+        inf_removed = vec_inf - np.outer(meas_proj, meas_proj)/meas_cov
+        cov_from_est = meas_proj @ la.inv(inf_removed) @ meas_proj
+        pred_meas = la.norm(diff_loc) + c_small * vec_est[3]
+        return compute_prob(pred_meas - meas[1], cov_from_est+meas_cov)
 
-    def form_continuous_graph(Z : np.array,
-                        U : np.array,
-                        outlier_vals : np.array,
-                        landmark_locs : np.array,
+    def form_continuous_graph(gnss_data : np.array,
+                        outlier_bools : np.array,
                         meas_noise : gtsam.noiseModel,
                         outlier_noise : gtsam.noiseModel,
-                        dyn_noise : gtsam.noiseModel ) -> gtsam.NonlinearFactorGraph:
+                        dyn_noise : np.array ) -> gtsam.NonlinearFactorGraph:
         '''
-        Take in the measurements, inputs, current values, outlier values, and create a graph and return it
+        Take in the measurements, current values, outlier values, and create a graph and return it
         This graph will have different measurement noises associated with each measurement depending on the
         values in outlier_vals
 
         Inputs:
-            Z: the measurements (an N x nl array) where N is the number of time steps and nl is the number of landmarks
-            U: the inputs (an N-1 x 2 array) 
+            gnss_data: the array with all the measurements and timestamps in it
             outlier_vals: Which measurements are considered outliers (an N x nl array of bools)
-            landmark_locs: the locations of the landmarks (an nl x 2 array)
             meas_noise:  What noise model to use with the measurements when they are not outliers
             outlier_noise: What noise model to use with the measurements when they are outliers
             dyn_noise: What noise model to use with the dyanmics factors
@@ -90,53 +96,48 @@ def solve_scenario(in_data : dict,
         # Create the graph
         graph = gtsam.NonlinearFactorGraph()
 
-        ## odometry factors
-        ### Note that this uses Lie Algebra sorts of things. The factor is the difference between the 
-        ### current and previous pose, in the the previous pose's coordinate frame.  So, it is a 
-        ### differentiable Pose factor
-        for ii in range(N-1):
-            curr_V = U[ii,0] * dt
-            curr_w = U[ii,1] * dt
-            Vx = curr_V * m.cos(curr_w/2.)
-            Vy = curr_V * m.sin(curr_w/2.)
-            graph.add( gtsam.BetweenFactorPose2( pose_key(ii), pose_key(ii+1), gtsam.Pose2( Vx, Vy, curr_w ), dyn_noise ) )
-
-        # measurement factors
-        for ii,meas in enumerate(Z):
-            for jj in range(nl):
-                if outlier_vals[ii,jj]:
-                    # Add measurement factor
-                    graph.add( gtsam.CustomFactor( outlier_noise, [pose_key(ii)], 
-                                                    partial(error_range_known_landmark, landmark_locs[jj], meas[jj] ) ) )
+        ## odometry factors.  Basically, no odometry except on the clock 
+        ## (and a really weak prior between two locations in case all the satellites get "outliered" away)
+        for ii in range(1,len(gnss_data)):
+            dt = gnss_data[ii,0]-gnss_data[ii-1,0]
+            graph.add( gtsam.BetweenVector5Factor ( pose_key(ii-1), pose_key(ii), dt,
+                                            gtsam.noiseModel.Diagonal.Variances(dyn_noise*dt) ) )
+            # graph.add( gtsam.ClockErrorFactor ( pose_key(ii-1), pose_key(ii), dt,
+            #                                    gtsam.noiseModel.Diagonal.Variances(bcn_dyn_Q_diags*dt) ) )
+            # graph.add( gtsam.CustomFactor( gtsam.noiseModel.Diagonal.Variances(bcn_dyn_Q_diags*dt), 
+            #                                [pose_key(ii-1), pose_key(ii)], 
+            #                                partial(error_clock, dt) ) )
+        # measurement (and switch) factors
+        for ii,data in enumerate(gnss_data):
+            meas_list = data[2]
+            for jj in range(len(meas_list)):
+                curr_meas = meas_list[jj]
+                # Add measurement factor
+                # graph.add( gtsam.CustomFactor( meas_noise, [pose_key(ii)],  
+                #                                 partial(error_psuedorange, curr_meas[1], curr_meas[2:]) ) )
+                if outlier_bools[ii,jj]:
+                    graph.add( gtsam.PseudoRangeFactor( pose_key(ii),
+                                                    curr_meas[1], curr_meas[2:], outlier_noise))
                 else:
-                    graph.add( gtsam.CustomFactor( meas_noise, [pose_key(ii)],
-                                                    partial(error_range_known_landmark, landmark_locs[jj], meas[jj] ) ) )
-        
+                    graph.add( gtsam.PseudoRangeFactor( pose_key(ii), 
+                                                    curr_meas[1], curr_meas[2:], meas_noise))
+
         return graph
         
-    # Compute initial values using only odometry. Store the initial estimate as well for plotting (initial_np)
-    # Also, initialize the outlier values for the odometery and measurement values.
+    # Compute initial values using all measurements (no outlier rejection)
     initial_estimates = gtsam.Values()
-    initial_estimates.insert( pose_key(0), gtsam.Pose2(*x0) )
-    curr_x=copy.copy( x0 )
-    initial_np = np.zeros((N,3))
-    initial_np[0] = x0
-    for ii in range(N-1):
-        curr_x[0] += U[ii,0]*dt * m.cos(curr_x[2]+U[ii,1]*dt/2.)
-        curr_x[1] += U[ii,0]*dt * m.sin(curr_x[2]+U[ii,1]*dt/2.)
-        curr_x[2] += U[ii,1]*dt
-        initial_estimates.insert(pose_key(ii+1), gtsam.Pose2( *curr_x ) )
-        initial_np[ii+1] = curr_x
-
-    # Go through and initialize the outlier discrete values as well
-    for ii,meas in enumerate(Z):
-        for jj in range(nl):
-            est_dist = np.linalg.norm(landmark_locs[jj] - initial_np[ii,:2])
-            cov_proj = (landmark_locs[jj] - initial_np[ii,:2])/est_dist
-            # This covariance is not too accurate, but hopefully better than nothing
-            marg_cov = cov_proj @ (dyn_noise.covariance()[:2,:2] * ii) @ cov_proj
-            inlier_prob = compute_prob(est_dist-meas[jj], meas_noise.covariance().item()+marg_cov)
-            outlier_prob = compute_prob(est_dist-meas[jj], outlier_noise.covariance().item()+marg_cov)
+    initial_locs = np.zeros((len(gnss_data),5))
+    for ii,data in enumerate(gnss_data):
+        meas_list = data[2]
+        loc_cov = np.array((4,4))
+        initial_locs[ii] = init_pos(meas_list, loc_cov)
+        initial_estimates.insert( pose_key(ii), initial_locs[ii] )
+        # Go through and initialize the outlier discrete values as well
+        for jj,meas in enumerate(meas_list):
+            
+            # Compute whether each one should be an inlier or an outlier
+            inlier_prob = compute_prob_full( meas, meas_noise.covariance().item(), initial_locs[ii], la.inv(loc_cov))
+            outlier_prob = compute_prob_full( meas, outlier_noise.covariance().item(), initial_locs[ii], la.inv(loc_cov))
             outlier_bools[ii,jj] = outlier_prob > inlier_prob
     # Everything should be set up. Now to optimize
     ## This is essentially an EM (expectation maximization) algorithm.
@@ -150,14 +151,13 @@ def solve_scenario(in_data : dict,
     num_loops = 0
     ############# The Optimization Loop #############
     # This is the EM loop
-    # TODO: Figure out a better way to run the iterations, converging when things don't change
     while num_loops < 20 and (not outlier_not_changed_count==2): # optimization iterations ... a stupid, but simple way to start
         # Optimize the continuous graph
         if outlier_not_changed_count == 1:  # if the outlier values have not changed, let the continuous optimize more
             parameters.setMaxIterations(20)
         else:
             parameters.setMaxIterations(2)
-        graph = form_continuous_graph(Z, U, outlier_bools, landmark_locs, meas_noise, outlier_noise, dyn_noise)
+        graph = form_continuous_graph(gnss_data, outlier_bools, meas_noise, outlier_noise, complete_dyn_Q_diags)
         optimizer = gtsam.GaussNewtonOptimizer(graph, curr_values, parameters)
         curr_values = optimizer.optimize()
         # Set the discrete values
@@ -168,31 +168,15 @@ def solve_scenario(in_data : dict,
         ## given a covariance of the inlier or outlier model + the information matrix computed above (and then inverted)
         marginals = gtsam.Marginals(graph, curr_values)
         old_outliers = outlier_bools.copy()
-        for ii,meas in enumerate(Z):
-            # Find the marginal covariance for each pose
-            curr_cov =marginals.marginalCovariance(pose_key(ii))[:2,:2]
-            # If the marginal is in the "manifold" space, then I need to rotate it to a global coordinate frame
-            theta = curr_values.atPose2(pose_key(ii)).theta()
-            DCM = np.array([[m.cos(theta), -m.sin(theta)], [m.sin(theta), m.cos(theta)]])
-            curr_cov = DCM @ curr_cov @ DCM.T
+        for ii,data in enumerate(gnss_data):
+            meas_list = data[2]
+            curr_cov = marginals.marginalCovariance(pose_key(ii))[:4,:4]
             raw_info = la.inv(curr_cov)
-
-            for jj in range(nl):
-                # Compute the contribution to the information matrix from the current measurement and remove it
-                diff_loc = landmark_locs[jj] - curr_values.atPose2(pose_key(ii)).translation()
-                pred_meas = la.norm(diff_loc)
-                inf_vect = diff_loc / pred_meas
-                cov_scale = outlier_noise.sigma() if outlier_bools[ii,jj] else meas_noise.sigma()
-                pose_cov = inf_vect @ la.inv(raw_info - cov_scale**(-2) * np.outer(inf_vect, inf_vect) ) @ inf_vect
-                if DEBUG:
-                    print('ii is',ii,'and jj is',jj, 'and pose_cov is',pose_cov)
-                    print('raw_info is',raw_info)
-                    print('cov_scale is',cov_scale, 'mult by inf_vect is',cov_scale**(-2) * np.outer(inf_vect, inf_vect) )
-                    print('la.inv part is',la.inv(raw_info - cov_scale**(-2) * np.outer(inf_vect, inf_vect) ))
-
-                # Compute the probability of the difference between the estimated and measured value
-                inlier_prob = compute_prob(pred_meas-meas[jj], meas_noise.covariance().item() + pose_cov)
-                outlier_prob = compute_prob(pred_meas-meas[jj], outlier_noise.covariance().item() + pose_cov)
+            curr_loc = curr_values.atVector(pose_key(ii))
+            for jj,meas in enumerate(meas_list):
+                # Compute whether each one should be an inlier or an outlier
+                inlier_prob = compute_prob_full(meas, meas_noise.covariance().item(), curr_loc, raw_info)
+                outlier_prob = compute_prob_full(meas, outlier_noise.covariance().item(), curr_loc, raw_info)
                 outlier_bools[ii,jj] = outlier_prob > inlier_prob
         if np.array_equal(outlier_bools,old_outliers):
             outlier_not_changed_count +=1
@@ -207,94 +191,140 @@ def solve_scenario(in_data : dict,
 
 
     # Prepare the results to be returned.
-    est_poses=[]
-    for ii in range(N):
-        est_poses.append(curr_values.atPose2(pose_key(ii)))
-    np_est_poses = pose2_list_to_nparray(est_poses)
+    est_poses=np.zeros((len(gnss_data),3))
+    for ii in range(len(gnss_data)):
+        est_poses[ii]=(curr_values.atVector(pose_key(ii))[:3])
 
-    return initial_np, np_est_poses
+    return initial_locs, est_poses
 
 
-#%%
 if __name__ == '__main__':
-    out_file = 'discrete_hv_unicycle_res.npz'
-    n_runs = 100
-    # This is a data structure that holds the directory name and
-    # what the output file should say so they get picked together!
-    in_opts = np.array([
-        ['No outliers', 'no_outliers/'],
-        ['10% outliers', 'measurement_10pc_outliers/'],
-        ['20% outliers', 'measurement_20pc_outliers/'],
-        ['30% outliers', 'measurement_30pc_outliers/'],
-        ['40% outliers', 'measurement_40pc_outliers/'],
-        ['50% outliers', 'measurement_50pc_outliers/'],
-    ])
+    out_file = 'discrete_independent_gnss_res.npz'
 
     # What weight to use on the switching model
-    est_opts = np.array([ 'DI']) # DI = discrete independent
+    est_opts = np.array([
+        ['DI', gtsam.noiseModel.Isotropic.Sigma(1,1000)]
+    ])
 
     if DEBUG: # change this to know which one runs...
-        in_opts = np.array([in_opts[0]])
-        est_opts = np.array([est_opts[0]])
-        which_run = 21
-        run_list=[which_run]
+        est_opts = np.array([est_opts[3]])
         out_file = 'DEBUG'+out_file
-    else:
-        run_list = np.arange(n_runs)
 
-    times = np.zeros((len(in_opts),len(est_opts),n_runs))
-    pos_RMSEs = np.zeros((len(in_opts),len(est_opts),n_runs))
-    ang_RMSEs = np.zeros((len(in_opts),len(est_opts),n_runs))
+    times = np.zeros(len(est_opts))
+    pos_RMSEs = np.zeros(len(est_opts))
 
     # This is considered constant for all these runs:
     meas_noise = gtsam.noiseModel.Isotropic.Sigma( 1, 1.0 )
 
     # in_select and est_select control everything below
-    for in_select in range(len(in_opts)):
-        for est_select in range(len(est_opts)):
-            print('Running input',in_opts[in_select,0], 'and estimator',est_opts[est_select])
-            in_path = in_opts[in_select,1]
-            # out_file = 'RMSE_input_'+in_opts[in_select,1]+'_est_'+est_opts[est_select,0]+'.npy'
-            for ii in tqdm(run_list):
-                # First, read in the data from the file
-                in_file = in_path+f'run_{ii:04d}.npz'
-                in_data = dict(np.load(in_file))
+    for est_select in range(len(est_opts)):
+        print('Running estimator',est_opts[est_select,0])
 
-                in_data['x0'] = np.array([0, 0, m.pi/2])
+        # Decide what cost function we will use for the switching factors
+        outlier_noise = est_opts[est_select,1]
 
-                ########   
-                # Now run the optimziation (with whatever noise model you have)    
-                start_time = time.time()
-                initial_np, np_est_poses = solve_scenario(in_data)
-                end_time = time.time()
-                times[in_select,est_select,ii] = end_time - start_time
+        in_data = get_chemnitz_data()
+        if DEBUG:
+            run_length = 4
+        else:
+            run_length = len(in_data)
+        ########   
+        # Now run the optimziation (with whatever noise model you have)    
+        start_time = time.time()
+        np_est_poses = solve_scenario(in_data[:run_length], outlier_noise=outlier_noise)
+        end_time = time.time()
+        times[est_select] = end_time - start_time
+        data_out_file = 'data_discrete_ind_gnss_res_'+est_opts[est_select,0]+'.npz'
+        if DEBUG:
+            data_out_file = "DEBUG_"+data_out_file
+        np.savez(data_out_file, est_states=np_est_poses)
 
-                truth = in_data['truth']
+        # plt.plot(np_est_poses)
+        # plt.show()
+        truth = np.array([in_data[i,1] for i in range(run_length)])
 
-                if DEBUG:
+        if DEBUG:
 
-                    # When doing one run, good for plotting results
-                    fig = plt.figure()
+            # When doing one run, good for plotting results
+            fig = plt.figure()
 
-                    plt.plot(truth[:,0], truth[:,1])
-                    plt.plot(np_est_poses[:,0], np_est_poses[:,1])
-                    plt.plot(initial_np[:,0], initial_np[:,1])
-                    plt.legend(['truth', 'est', 'initial'])
-                    plt.show()
+            plt.plot(truth[:,0], truth[:,1])
+            plt.plot(np_est_poses[:,0], np_est_poses[:,1])
+            plt.legend(['truth', 'est'])
+            plt.show()
 
 
-                RMSE = m.sqrt(np.average(np.square(truth[:,:2]- np_est_poses[:,:2])))
-                RMSE_ang = m.sqrt(np.average( np.square( angleize_np_array(truth[:,2]- np_est_poses[:,2]) ) ) )
-                if DEBUG:
-                    print("RMSE (on x and y) is",RMSE)
-                    print("RMSE (on angle) is",RMSE_ang)
-                pos_RMSEs[in_select,est_select,ii] = RMSE
-                ang_RMSEs[in_select,est_select,ii] = RMSE_ang
-            # print("Average RMSEs (pos & angle) are",np.average(RMSEs,1))
+        RMSE = m.sqrt(np.average(np.square(truth[:,:2]- np_est_poses[:,:2])))
+        if DEBUG:
+            print("RMSE (on x, y, and z) is",RMSE)
+        pos_RMSEs[est_select] = RMSE
+        
+    est_save = est_opts[:,0].astype(str)
+    np.savez(out_file, times=times, pos_RMSEs=pos_RMSEs, est_opts=est_save)
+
+# %%
+
+
+#%%
+if __name__ == '__main__':
+    out_file = 'discrete_hv_gnss_res.npz'
+    # This is a data structure that holds the directory name and
+    # what the output file should say so they get picked together!
+
+    # What weight to use on the switching model
+    est_opts = np.array(['DI',gtsam.noiseModel.Isotropic.Sigma(1,1000)]) # DI = discrete independent
+
+    if DEBUG: # change this to know which one runs...
+        est_opts = np.array([est_opts[0]])
+        out_file = 'DEBUG'+out_file
+
+    times = np.zeros((len(est_opts)))
+    pos_RMSEs = np.zeros((len(est_opts)))
+
+
+    in_data = get_chemnitz_data()
+ 
+    # est_select controls everything below
+    for est_select in range(len(est_opts)):
+        print('Running estimator',est_opts[est_select,0])
+        ########   
+        # Now run the optimziation (with whatever noise model you have)    
+        start_time = time.time()
+        np_est_poses = solve_scenario(in_data[:run_length], outlier_noise = est_opts[est_select,1])
+        end_time = time.time()
+        times[est_select] = end_time - start_time
+        data_out_file = 'data_discrete_ind_gnss_res_'+est_opts[est_select,0]+'.npz'
+        if DEBUG:
+            data_out_file = "DEBUG_"+data_out_file
+        np.savez(data_out_file, est_states=np_est_poses)
+
+        # plt.plot(np_est_poses)
+        # plt.show()
+        truth = np.array([in_data[i,1] for i in range(len(in_data))])
+
+
+        if DEBUG:
+
+            # When doing one run, good for plotting results
+            fig = plt.figure()
+
+            plt.plot(truth[:,0], truth[:,1])
+            plt.plot(np_est_poses[:,0], np_est_poses[:,1])
+            plt.plot(initial_np[:,0], initial_np[:,1])
+            plt.legend(['truth', 'est', 'initial'])
+            plt.show()
+
+
+        RMSE = m.sqrt(np.average(np.square(truth[:,:2]- np_est_poses[:,:2])))
+        RMSE_ang = m.sqrt(np.average( np.square( angleize_np_array(truth[:,2]- np_est_poses[:,2]) ) ) )
+        if DEBUG:
+            print("RMSE (on x and y) is",RMSE)
+            print("RMSE (on angle) is",RMSE_ang)
+        pos_RMSEs[est_select] = RMSE
+        # print("Average RMSEs (pos & angle) are",np.average(RMSEs,1))
             # plt.plot(RMSEs)
             # plt.show()
-    est_save = est_opts.astype(str)
-    in_opts_save = in_opts[:,0].astype(str)
-    np.savez(out_file, times=times, pos_RMSEs=pos_RMSEs, ang_RMSEs=ang_RMSEs, in_opts=in_opts_save, est_opts=est_save)
+    est_save = est_opts[:,0].astype(str)
+    np.savez(out_file, times=times, pos_RMSEs=pos_RMSEs, est_opts=est_save)
 
 # %%

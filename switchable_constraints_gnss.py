@@ -37,6 +37,9 @@ def solve_scenario(gnss_data: np.array,
 
     '''
     bcn_dyn_Q_diags = dyn_Q_diags * time_divider**2 # bcn = better condition number... Makes GTSAM happier
+    # For a weak dynamics between positions, do 30 m/s, so running 60 miles/hour (approx) is only 1 sigma
+    complete_dyn_Q_diags = np.ones(5)*900.
+    complete_dyn_Q_diags[3:] = bcn_dyn_Q_diags
     # bcn_dyn_Q_diags[0] *=  time_divider**2 
     # Create the graph and optimize
     graph = gtsam.NonlinearFactorGraph()
@@ -57,9 +60,13 @@ def solve_scenario(gnss_data: np.array,
     ## odometry factors.  Basically, no odometry except on the clock...
     for ii in range(1,len(gnss_data)):
         dt = gnss_data[ii,0]-gnss_data[ii-1,0]
-        graph.add( gtsam.CustomFactor( gtsam.noiseModel.Diagonal.Variances(bcn_dyn_Q_diags*dt), 
-                                       [pose_key(ii-1), pose_key(ii)], 
-                                       partial(error_clock, dt) ) )
+        graph.add( gtsam.BetweenVector5Factor ( pose_key(ii-1), pose_key(ii), dt,
+                                           gtsam.noiseModel.Diagonal.Variances(complete_dyn_Q_diags*dt) ) )
+        # graph.add( gtsam.ClockErrorFactor ( pose_key(ii-1), pose_key(ii), dt,
+        #                                    gtsam.noiseModel.Diagonal.Variances(bcn_dyn_Q_diags*dt) ) )
+        # graph.add( gtsam.CustomFactor( gtsam.noiseModel.Diagonal.Variances(bcn_dyn_Q_diags*dt), 
+        #                                [pose_key(ii-1), pose_key(ii)], 
+        #                                partial(error_clock, dt) ) )
     # measurement (and switch) factors
     for ii,data in enumerate(gnss_data):
         meas_list = data[2]
@@ -69,10 +76,12 @@ def solve_scenario(gnss_data: np.array,
             # Add measurement factor
             # graph.add( gtsam.CustomFactor( meas_noise, [pose_key(ii)],  
             #                                 partial(error_psuedorange, curr_meas[1], curr_meas[2:]) ) )
-            graph.add( gtsam.CustomFactor( meas_noise, [pose_key(ii), switch_key(ii,jj)], 
-                                            partial(switchable_error_pseudorange, 
-                                                    curr_meas[2:], curr_meas[1]  ) ) ) # pass in satellite loc and pseudo-range
-            # Add switching factor
+            graph.add( gtsam.sc_PseudoRangeFactor( pose_key(ii), switch_key(ii,jj), 
+                                                  curr_meas[1], curr_meas[2:], meas_noise))
+            # graph.add( gtsam.CustomFactor( meas_noise, [pose_key(ii), switch_key(ii,jj)], 
+            #                                 partial(switchable_error_pseudorange, 
+            #                                         curr_meas[2:], curr_meas[1]  ) ) ) # pass in satellite loc and pseudo-range
+            # # Add switching factor
             # graph.add( gtsam.CustomFactor( switch_noise, [switch_key(ii,jj)],
             #                                switchable_constraint_error) )
             graph.add( gtsam.PriorFactorDouble( switch_key(ii,jj), 1.0, switch_noise ) )
@@ -80,10 +89,11 @@ def solve_scenario(gnss_data: np.array,
 
     ## Everything should be set up. Now to optimize
     ## TODO:  move to dogleg optimizer?
-    parameters = gtsam.GaussNewtonParams()
-    parameters.setMaxIterations(100)
+    parameters = gtsam.DoglegParams()
+    parameters.setMaxIterations(50)
+    parameters.setRelativeErrorTol(5E-4)
     parameters.setVerbosity("ERROR")
-    optimizer = gtsam.GaussNewtonOptimizer(graph, initial_estimates, parameters)
+    optimizer = gtsam.DoglegOptimizer(graph, initial_estimates, parameters)
     result = optimizer.optimize()
 
     # Prepare the results to be returned.
@@ -140,7 +150,7 @@ if __name__ == '__main__':
         if DEBUG:
             run_length = 4
         else:
-            run_length = 4000 #len(in_data)
+            run_length = len(in_data)
         ########   
         # Now run the optimziation (with whatever noise model you have)    
         start_time = time.time()

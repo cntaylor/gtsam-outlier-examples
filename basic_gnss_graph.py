@@ -24,9 +24,10 @@ if DEBUG:
 def solve_scenario(gnss_data : np.array, 
                    meas_noise: gtsam.noiseModel = \
                     gtsam.noiseModel.Diagonal.Sigmas(np.diag(np.array([1.]))),
-                   dyn_Q_diags : np.array= np.array([4E-19, 1.4E-18]) ) \
+                   dyn_Q_diags : np.array= np.array([4E-7, 1.4E-6]) ) \
                 -> np.array:
     '''
+    //// Original Q values were:  np.array([4E-19, 1.4E-18])///
     Take in a numpy array with all the data in it (see get_chemnitz_data for format),
     create a graph to handle it, and solve it
     Inputs:
@@ -39,6 +40,8 @@ def solve_scenario(gnss_data : np.array,
 
     '''
 
+    complete_dyn_Q_diags = np.ones(5)*900.
+    complete_dyn_Q_diags[3:] = dyn_Q_diags
     # Create the graph and optimize
     graph = gtsam.NonlinearFactorGraph()
     initial_estimates = gtsam.Values()
@@ -49,27 +52,32 @@ def solve_scenario(gnss_data : np.array,
     ## odometry factors.  Basically, no odometry except on the clock...
     for ii in range(1,len(gnss_data)):
         dt = gnss_data[ii,0]-gnss_data[ii-1,0]
-        graph.add( gtsam.CustomFactor( gtsam.noiseModel.Diagonal.Variances(dyn_Q_diags*dt), 
-                                       [pose_key(ii-1), pose_key(ii)], 
-                                       partial(error_clock, dt) ) )
+        graph.add( gtsam.BetweenVector5Factor ( pose_key(ii-1), pose_key(ii), dt, 
+                                           gtsam.noiseModel.Diagonal.Variances(complete_dyn_Q_diags*dt) ) )
+        # graph.add( gtsam.ClockErrorFactor ( pose_key(ii-1), pose_key(ii), dt, 
+        #                                    gtsam.noiseModel.Diagonal.Variances(dyn_Q_diags*dt) ) )
+        # graph.add( gtsam.CustomFactor( gtsam.noiseModel.Diagonal.Variances(dyn_Q_diags*dt), 
+        #                                [pose_key(ii-1), pose_key(ii)], 
+        #                                partial(error_clock, dt) ) )
 
     # measurement factors
     for ii, data in tqdm(enumerate(gnss_data)):
         meas_list = data[2]
         for jj in range(len(meas_list)):
             curr_meas=meas_list[jj]
-            graph.add( gtsam.CustomFactor( meas_noise, [pose_key(ii)], 
-                                            partial(error_psuedorange, curr_meas[1], curr_meas[2:]) ) )
+            graph.add( gtsam.PseudoRangeFactor( pose_key(ii), curr_meas[1], 
+                curr_meas[2:], meas_noise ) ) 
+            # graph.add( gtsam.CustomFactor( meas_noise, [pose_key(ii)], 
+            #                             partial(error_psuedorange, curr_meas[1], curr_meas[2:]) ) )
         # Also add initial values
         initial_estimates.insert( pose_key(ii), init_pos( meas_list ) )
 
     ## Everything should be set up. Now to optimize
-        # TODO:  Dogleg optimization
-        # TODO: relativeDecrease termination of 1E-3
-    parameters = gtsam.GaussNewtonParams()
-    parameters.setMaxIterations(100)
+    parameters = gtsam.DoglegParams()
+    parameters.setMaxIterations(50)
+    parameters.setRelativeErrorTol(5E-4)
     parameters.setVerbosity("ERROR")
-    optimizer = gtsam.GaussNewtonOptimizer(graph, initial_estimates, parameters)
+    optimizer = gtsam.DoglegOptimizer(graph, initial_estimates, parameters)
     result = optimizer.optimize()
 
     # Prepare the results to be returned.
@@ -81,7 +89,7 @@ def solve_scenario(gnss_data : np.array,
 
 #%%
 if __name__ == '__main__':
-    out_file = 'basic_graph_gnss_res.npz'
+    out_file = 'basic_graph_gnss_res_newQ_betweenFactor.npz'
 
     # The basic Gaussian noise model assumed
     basic_meas_noise = \
@@ -138,7 +146,7 @@ if __name__ == '__main__':
         if DEBUG:
             run_length = 500
         else:
-            run_length = 4000 #len(in_data)
+            run_length = len(in_data)
         ########   
         # Now run the optimziation (with whatever noise model you have)    
         start_time = time.time()
