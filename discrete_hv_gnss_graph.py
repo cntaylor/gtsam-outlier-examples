@@ -8,11 +8,34 @@ from gnss_est_utils import time_divider, c_small, get_chemnitz_data, init_pos
 from functools import partial
 import copy
 import time
-# from numba import jit
+from numba import jit
 
-DEBUG=True
+DEBUG=False
 if DEBUG:
     import matplotlib.pyplot as plt
+
+@jit
+def compute_prob(diff: float, cov : float) -> float:
+    # Compute the probability according to the full normal distribution
+    # MUST include the scaling factor!
+    return m.exp(-.5*diff**2/cov ) * 1/m.sqrt(2*m.pi*cov)
+
+@jit
+def compute_prob_full(meas : np.array, meas_cov: float, vec_est : np.array, vec_inf : np.array) -> float:
+    # Compute the probability by removing the effect of the measurement
+    # from the current estimated covariance, then compute the full probability
+    # First, remove the effect of the measurement from the information matrix
+    # Note that vec_inf is assumed to be 4x4 as I ignore clock rate error 
+    diff_loc = vec_est[:3] - meas[2:]
+    diff_loc_norm = la.norm(diff_loc) #m.sqrt(diff_loc[0]**2 + diff_loc[1]**2 + diff_loc[2]**2)
+    diff_loc_uv = diff_loc / diff_loc_norm  #la.norm(diff_loc) # uv = unit vector
+    full_deriv = np.array([diff_loc_uv[0], diff_loc_uv[1], diff_loc_uv[2], c_small])
+    meas_proj = full_deriv / m.sqrt(full_deriv[0]**2 + full_deriv[1]**2 + full_deriv[2]**2 + full_deriv[3]**2)
+    inf_removed = vec_inf - np.outer(meas_proj, meas_proj)/meas_cov
+    cov_from_est = meas_proj @ la.inv(inf_removed) @ meas_proj
+    pred_meas = diff_loc_norm + c_small * vec_est[3]
+    return compute_prob(pred_meas - meas[1], cov_from_est+meas_cov)
+
 
 def solve_scenario(gnss_data: np.array,
                    meas_noise: gtsam.noiseModel = \
@@ -53,25 +76,6 @@ def solve_scenario(gnss_data: np.array,
 
     # Array for holding outlier discrete values
     outlier_bools = np.empty((len(gnss_data),nl), dtype=bool)
-
-    def compute_prob(diff: float, cov : float) -> float:
-        # Compute the probability according to the full normal distribution
-        # MUST include the scaling factor!
-        return m.exp(-.5*diff**2/cov ) * 1/m.sqrt(2*m.pi*cov)
-    
-    def compute_prob_full(meas : np.array, meas_cov: float, vec_est : np.array, vec_inf : np.array) -> float:
-        # Compute the probability by removing the effect of the measurement
-        # from the current estimated covariance, then compute the full probability
-        # First, remove the effect of the measurement from the information matrix
-        # Note that vec_inf is assumed to be 4x4 as I ignore clock rate error 
-        diff_loc = vec_est[:3] - meas[2:]
-        diff_loc_uv = diff_loc / la.norm(diff_loc) # uv = unit vector
-        full_deriv = np.array([diff_loc_uv[0], diff_loc_uv[1], diff_loc_uv[2], c_small])
-        meas_proj = full_deriv / la.norm(full_deriv)
-        inf_removed = vec_inf - np.outer(meas_proj, meas_proj)/meas_cov
-        cov_from_est = meas_proj @ la.inv(inf_removed) @ meas_proj
-        pred_meas = la.norm(diff_loc) + c_small * vec_est[3]
-        return compute_prob(pred_meas - meas[1], cov_from_est+meas_cov)
 
     def form_continuous_graph(gnss_data : np.array,
                         outlier_bools : np.array,
@@ -153,7 +157,7 @@ def solve_scenario(gnss_data: np.array,
     num_loops = 0
     ############# The Optimization Loop #############
     # This is the EM loop
-    while num_loops < 35 and (not outlier_not_changed_count==2): # optimization iterations ... a stupid, but simple way to start
+    while num_loops < 4 and (not outlier_not_changed_count==2): # optimization iterations ... a stupid, but simple way to start
         # Optimize the continuous graph
         if outlier_not_changed_count == 1:  # if the outlier values have not changed, let the continuous optimize more
             parameters.setMaxIterations(20)
